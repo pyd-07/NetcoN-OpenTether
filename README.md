@@ -72,7 +72,7 @@ sudo ./setup.sh
 
 ```bash
 go build -o relay ./...
-sudo ./relay
+sudo ./relay/...
 ```
 
 The relay creates a TUN interface (`ot0`), sets up NAT, and listens on `127.0.0.1:8765`.

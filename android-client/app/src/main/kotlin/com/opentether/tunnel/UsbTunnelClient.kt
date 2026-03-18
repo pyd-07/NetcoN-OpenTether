@@ -6,6 +6,7 @@ import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import com.opentether.Constants
+import com.opentether.StatsHolder
 import com.opentether.model.OtpFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,20 +26,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "OT/UsbTunnelClient"
 
-/**
- * Why Os.socket() + protect(int) instead of new Socket() + protect(Socket):
- *
- *   new Socket() creates the native fd lazily — the socket() syscall only
- *   runs at the first connect() or bind() call. So protect(Socket) sees
- *   fd = -1 and returns false every time, regardless of permissions.
- *
- *   Os.socket() calls the socket() syscall immediately and returns a
- *   FileDescriptor with a valid fd. We then extract the int fd via
- *   reflection and call protect(int) — the overload that works on raw fds.
- *
- *   Requires android.permission.INTERNET in AndroidManifest.xml.
- *   Without it, Os.socket() throws EPERM before we even reach protect().
- */
 class UsbTunnelClient(
     private val outbound:   Channel<ByteArray>,
     private val inbound:    Channel<ByteArray>,
@@ -54,10 +41,8 @@ class UsbTunnelClient(
 
             var fd: FileDescriptor? = null
             try {
-                // Step 1 — create socket fd immediately (requires INTERNET permission)
                 fd = Os.socket(OsConstants.AF_INET, OsConstants.SOCK_STREAM, OsConstants.IPPROTO_TCP)
 
-                // Step 2 — extract raw int fd for protect(int)
                 val intFd = intFd(fd)
                 if (intFd == -1) {
                     Log.e(TAG, "could not read native fd — will retry")
@@ -65,19 +50,14 @@ class UsbTunnelClient(
                     continue
                 }
 
-                // Step 3 — protect before connect, using the int overload
                 if (!vpnService.protect(intFd)) {
                     Log.e(TAG, "protect(int) returned false — will retry")
                     delay(Constants.RECONNECT_DELAY_MS)
                     continue
                 }
 
-                // Step 4 — tune socket
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, OsConstants.TCP_NODELAY, 1)
-
-                // Step 5 — connect through ADB reverse tunnel
                 Os.connect(fd, InetAddress.getByName(Constants.RELAY_HOST), Constants.RELAY_PORT)
-
                 Log.i(TAG, "connected to relay")
 
                 val input  = DataInputStream(FileInputStream(fd))
@@ -120,7 +100,7 @@ class UsbTunnelClient(
         } finally {
             sendJob.cancel()
             recvJob.cancel()
-            closeFd(fd)   // unblocks readFully() in receiveLoop
+            closeFd(fd)
             recvJob.join()
         }
     }
@@ -132,6 +112,11 @@ class UsbTunnelClient(
                 val connId = connIdCounter.getAndIncrement()
                 val frame  = PacketEncoder.encode(connId, rawPacket, Constants.MSG_DATA)
                 out.write(frame)
+
+                // Increment shared counters — the service ticker will sample these
+                StatsHolder.bytesUpSec.addAndGet(rawPacket.size.toLong())
+                StatsHolder.totalUp.addAndGet(rawPacket.size.toLong())
+
                 Log.d(TAG, "→ relay ${rawPacket.size}B  conn_id=$connId")
             }
         } catch (e: IOException) {
@@ -150,6 +135,11 @@ class UsbTunnelClient(
                     Constants.MSG_DATA -> {
                         val payload = frame.payload ?: continue
                         Log.d(TAG, "← relay ${payload.size}B  conn_id=${frame.connId}")
+
+                        // Increment shared counters
+                        StatsHolder.bytesDownSec.addAndGet(payload.size.toLong())
+                        StatsHolder.totalDown.addAndGet(payload.size.toLong())
+
                         inbound.send(payload)
                     }
                     Constants.MSG_PING  -> Log.d(TAG, "← relay PING")
@@ -170,11 +160,6 @@ class UsbTunnelClient(
         }
     }
 
-    /**
-     * Extracts the native int fd from a FileDescriptor via reflection.
-     * The "descriptor" field is a package-private int in Android's
-     * FileDescriptor, stable across all API levels. Returns -1 on failure.
-     */
     private fun intFd(fd: FileDescriptor): Int = try {
         val f = FileDescriptor::class.java.getDeclaredField("descriptor")
         f.isAccessible = true

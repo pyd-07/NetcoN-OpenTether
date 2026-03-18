@@ -11,11 +11,14 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.opentether.Constants
 import com.opentether.MainActivity
+import com.opentether.StatsHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 import com.opentether.tunnel.UsbTunnelClient
@@ -27,7 +30,6 @@ const val ACTION_STOP  = "com.opentether.action.STOP"
 
 class OpenTetherVpnService : VpnService() {
 
-    // SupervisorJob: a crash in one child coroutine doesn't cancel the others.
     private val serviceJob   = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
@@ -51,7 +53,6 @@ class OpenTetherVpnService : VpnService() {
                 stopSelf()
             }
             else -> {
-                // Restarted by system after low-memory kill (START_STICKY).
                 Log.i(TAG, "restarted by system")
                 startForegroundNotification()
                 startVpn()
@@ -61,7 +62,6 @@ class OpenTetherVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        // User disabled VPN from Settings, or another VPN took over.
         Log.i(TAG, "revoked by system")
         super.onRevoke()
         stopVpn()
@@ -85,10 +85,24 @@ class OpenTetherVpnService : VpnService() {
         vpnInterface = iface
         Log.i(TAG, "TUN interface established (fd=${iface.fd})")
 
+        StatsHolder.setRunning(true)
+
         val fd = iface.fileDescriptor
         TunReader(fd, outboundChannel).start(serviceScope)
         TunWriter(fd, inboundChannel).start(serviceScope)
         UsbTunnelClient(outboundChannel, inboundChannel, this).start(serviceScope)
+
+        // ── Stats ticker ──────────────────────────────────────────────────
+        // Runs every second regardless of relay connection state.
+        // Samples StatsHolder's atomic byte counters and publishes VpnStats.
+        serviceScope.launch(Dispatchers.IO) {
+            Log.i(TAG, "stats ticker started")
+            while (isActive) {
+                delay(1_000L)
+                StatsHolder.tick()
+            }
+            Log.i(TAG, "stats ticker stopped")
+        }
 
         Log.i(TAG, "VPN running — connecting to relay")
     }
@@ -98,8 +112,8 @@ class OpenTetherVpnService : VpnService() {
             Builder()
                 .addAddress(Constants.VPN_CLIENT_IP, Constants.VPN_PREFIX)
                 .addAddress("fdcc::1", 64)
-                .addRoute("0.0.0.0", 0)        // capture all IPv4
-                .addRoute("::", 0)              // capture all IPv6
+                .addRoute("0.0.0.0", 0)
+                .addRoute("::", 0)
                 .addDnsServer(Constants.VPN_DNS_SERVER)
                 .setMtu(Constants.VPN_MTU)
                 .setSession(Constants.VPN_SESSION_NAME)
@@ -112,20 +126,14 @@ class OpenTetherVpnService : VpnService() {
 
     private fun stopVpn() {
         Log.i(TAG, "stopping")
-
-        // Cancel all coroutines — loops exit on next isActive check.
+        StatsHolder.setRunning(false)
         serviceScope.cancel("VPN stopped")
-
-        // Close channels — unblocks any suspended send()/receive().
         outboundChannel.close()
         inboundChannel.close()
-
-        // Close TUN fd — causes FileInputStream.read() to throw immediately.
         try { vpnInterface?.close() } catch (e: Exception) {
             Log.w(TAG, "error closing TUN: ${e.message}")
         }
         vpnInterface = null
-
         Log.i(TAG, "stopped")
     }
 

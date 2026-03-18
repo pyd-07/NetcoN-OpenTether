@@ -1,17 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#1F6FEB</color>
-    <color name="primaryDark">#154CA6</color>
+    <!-- Core backgrounds -->
+    <color name="backgroundDark">#111111</color>
+    <color name="surfaceDark">#1A1A1A</color>
+    <color name="cardDark">#1E1E1E</color>
+
+    <!-- Brand / action -->
+    <color name="primary">#3C3489</color>
+    <color name="primaryDark">#2B2566</color>
+
+    <!-- Status / chart -->
+    <color name="connectedGreen">#1D9E75</color>
+    <color name="chartUpload">#534AB7</color>
+
+    <!-- Text -->
+    <color name="textPrimary">#F0F0F0</color>
+    <color name="textSecondary">#888888</color>
+    <color name="textTertiary">#555555</color>
+    <color name="textMuted">#666666</color>
+
+    <!-- Button label on primary -->
+    <color name="buttonText">#EEEDFE</color>
+
+    <!-- Borders (very subtle on dark) -->
+    <color name="outline">#2A2A2A</color>
+
+    <!-- Legacy names kept so other files compile unchanged -->
+    <color name="backgroundTop">#111111</color>
+    <color name="backgroundBottom">#111111</color>
+    <color name="primary_legacy">#1F6FEB</color>
     <color name="secondary">#2A8BF2</color>
-    <color name="backgroundTop">#F5F8FD</color>
-    <color name="backgroundBottom">#E7EEF8</color>
-    <color name="surface">#FFFFFFFF</color>
-    <color name="surfaceSoft">#F8FBFF</color>
-    <color name="surfaceWarm">#F3F7FC</color>
-    <color name="outline">#D5E0EC</color>
-    <color name="textPrimary">#15253A</color>
-    <color name="textSecondary">#66768A</color>
-    <color name="chipBg">#E7F0FF</color>
-    <color name="chipText">#2159A8</color>
-    <color name="glowBlue">#66B8D4FF</color>
+    <color name="surface">#1E1E1E</color>
+    <color name="surfaceSoft">#1E1E1E</color>
+    <color name="surfaceWarm">#1E1E1E</color>
+    <color name="chipBg">#2B2566</color>
+    <color name="chipText">#EEEDFE</color>
+    <color name="glowBlue">#22534AB7</color>
+    <color name="textPrimary_legacy">#F0F0F0</color>
+    <color name="textSecondary_legacy">#888888</color>
 </resources>

@@ -1,18 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OpenTether</string>
+    <string name="status_connected">Connected via USB</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_hint">Tap Start VPN to route your phone\'s traffic through this PC.</string>
+    <string name="label_download">Download</string>
+    <string name="label_upload">Upload</string>
+    <string name="label_throughput">Throughput — last 30 s</string>
+    <string name="label_total_down">Total ↓</string>
+    <string name="label_total_up">Total ↑</string>
+    <string name="label_rtt">RTT</string>
+    <string name="label_active_connections">Active connections</string>
+    <string name="action_start">Start VPN</string>
+    <string name="action_stop">Stop VPN</string>
+
+    <!-- Legacy keys kept for compatibility -->
     <string name="hero_eyebrow">OpenTether</string>
-    <string name="hero_title">Reverse USB tethering with a clearer control panel.</string>
-    <string name="hero_description">A focused screen for starting the tunnel, tracking connection state, and handling Android VPN permission without guesswork.</string>
+    <string name="hero_title">Reverse USB tethering</string>
+    <string name="hero_description">Route your phone\'s internet traffic through your PC via USB — no root required.</string>
     <string name="chip_usb">USB linked</string>
     <string name="chip_secure">VPN ready</string>
     <string name="status_label">Connection status</string>
-    <string name="status_idle">Idle</string>
-    <string name="status_hint">The live status message updates here as the VPN permission flow starts, connects, or stops.</string>
-    <string name="action_start">Start VPN</string>
-    <string name="action_stop">Stop VPN</string>
     <string name="quick_start_title">Quick start</string>
-    <string name="quick_start_step_one">1. Connect the device over USB before starting the tunnel.</string>
-    <string name="quick_start_step_two">2. Tap Start VPN and approve the Android system VPN dialog if it appears.</string>
-    <string name="quick_start_step_three">3. Use Stop VPN anytime to end the session cleanly.</string>
+    <string name="quick_start_step_one">1. Connect device over USB.</string>
+    <string name="quick_start_step_two">2. Tap Start VPN and accept the system dialog.</string>
+    <string name="quick_start_step_three">3. Tap Stop VPN to end the session.</string>
 </resources>
