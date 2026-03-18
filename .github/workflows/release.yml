@@ -9,6 +9,8 @@ jobs:
   build-apk:
     name: Build and release APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
