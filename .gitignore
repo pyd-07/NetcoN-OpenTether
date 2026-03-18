@@ -1,0 +1,93 @@
+# ── Go relay ──────────────────────────────────────────────────────────────────
+*.exe
+*.test
+*.out
+/vendor/
+go.sum.bak
+
+# ── Android client ────────────────────────────────────────────────────────────
+
+# SDK location — machine-specific, never commit
+local.properties
+
+# Gradle build outputs
+.gradle/
+build/
+app/build/
+**/build/
+
+# Generated files
+app/src/main/assets/webkit/
+app/.cxx/
+
+# APK / AAB outputs — build these fresh, don't store binaries in git
+*.apk
+*.aab
+*.ap_
+
+# Keystore files — never commit signing keys
+*.jks
+*.keystore
+*.pepk
+keystore.properties
+release-keystore.properties
+
+# ProGuard generated files
+proguard/
+*.pro.bak
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/navEditor.xml
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.nfs*
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# ── Secrets / keys ────────────────────────────────────────────────────────────
+*.pem
+*.p12
+*.pk8
+.env
+.env.*
+secrets.properties
+
+# ── Logs / captures ──────────────────────────────────────────────────────────
+*.log
+*.pcap
+*.pcapng
+logcat.txt
+
+# ── Test outputs ──────────────────────────────────────────────────────────────
+test-results/
+coverage/
+*.cover
