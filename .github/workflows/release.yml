@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-apk:
+    name: Build and release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant Gradle execute permission
+        working-directory: android-client
+        run: chmod +x gradlew
+
+      - name: Build release APK
+        working-directory: android-client
+        run: ./gradlew assembleDebug
+
+      - name: Rename APK
+        run: |
+          mv android-client/app/build/outputs/apk/debug/app-debug.apk \
+             android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
+
+      - name: Build relay (Linux amd64)
+        run: |
+          go build -o relay-linux-amd64 ./...
+
+      - name: Build relay (Linux arm64)
+        run: |
+          GOARCH=arm64 go build -o relay-linux-arm64 ./...
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OpenTether ${{ github.ref_name }}
+          body: |
+            ## Install
+
+            ### Android app
+            1. Download `opentether-${{ github.ref_name }}.apk`
+            2. Open it on your phone to install
+            3. If prompted, allow installation from unknown sources
+
+            ### PC relay
+            Download the binary for your architecture and run:
+            ```bash
+            chmod +x relay-linux-amd64
+            sudo ./relay-linux-amd64
+            ```
+
+            ### One-command setup (recommended)
+            ```bash
+            git clone https://github.com/pyd-07/NetcoN-OpenTether.git
+            cd NetcoN-OpenTether
+            sudo ./setup.sh
+            ```
+
+            ## Requirements
+            - Linux PC (kernel 3.17+)
+            - Android 8.0+ with USB debugging enabled
+
+          files: |
+            android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
+            relay-linux-amd64
+            relay-linux-arm64
+
+  build-relay-test:
+    name: Test relay build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build relay
+        run: go build ./...
