@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH=$PATH:/usr/local/go/bin:/home/$SUDO_USER/go/bin
 set -euo pipefail
 
 # ─────────────────────────────────────────────
@@ -45,8 +46,8 @@ install_if_missing java default-jdk
 
 # Go needs special handling — apt version is often outdated
 if ! command -v go &>/dev/null; then
-  warn "Go not found — installing Go 1.22..."
-  GO_VERSION="1.22.3"
+  warn "Go not found — installing latest stable Go..."
+  GO_VERSION=$(curl -fsSL https://go.dev/VERSION?m=text | head -1 | sed 's/go//')
   ARCH=$(dpkg --print-architecture)
   case $ARCH in
     amd64) GO_ARCH="amd64" ;;
@@ -58,8 +59,7 @@ if ! command -v go &>/dev/null; then
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
   info "Go ${GO_VERSION} installed"
 else
-  GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
-  info "Go $GO_VER already installed"
+  info "Go $(go version | awk '{print $3}' | sed 's/go//') already installed"
 fi
 
 # ─────────────────────────────────────────────

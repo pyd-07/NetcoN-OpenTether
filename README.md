@@ -62,7 +62,8 @@ cd NetcoN-OpenTether
 ### Quick Setup
 
 ```bash
-  sudo ./setup.sh
+chmod +x ./setup.sh
+sudo ./setup.sh
 ```
 
 ### Manual Steps
