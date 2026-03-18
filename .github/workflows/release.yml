@@ -36,11 +36,11 @@ jobs:
 
       - name: Build relay (Linux amd64)
         run: |
-          go build -o relay-linux-amd64 ./...
+          go build -o relay-linux-amd64 .
 
       - name: Build relay (Linux arm64)
         run: |
-          GOARCH=arm64 go build -o relay-linux-arm64 ./...
+          GOARCH=arm64 go build -o relay-linux-arm64 .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
