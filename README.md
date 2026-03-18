@@ -50,28 +50,42 @@ The relay receives the packets, routes them to the internet via NAT (iptables MA
 
 ---
 
-## Quick start
+## Working
 
-### 1. Build and start the relay
+#### Cloning the repo
 
 ```bash
 git clone https://github.com/pyd-07/NetcoN-OpenTether.git
 cd NetcoN-OpenTether
+```
 
+### Quick Setup
+
+```bash
+  sudo ./setup.sh
+```
+
+### Manual Steps
+
+#### 1. Build and start the relay
+
+```bash
 go build -o relay ./...
 sudo ./relay
 ```
 
 The relay creates a TUN interface (`ot0`), sets up NAT, and listens on `127.0.0.1:8765`.
 
-### 2. Connect your phone and set up the ADB tunnel
+
+
+#### 2. Connect your phone and set up the ADB tunnel
 
 ```bash
 adb devices                     # confirm phone is listed as "device"
 adb reverse tcp:8765 tcp:8765   # maps phone:8765 → PC:8765 over USB
 ```
 
-### 3. Install and start the Android app
+#### 3. Install and start the Android app
 
 ```bash
 cd android-client
@@ -82,7 +96,7 @@ adb shell am start -n com.opentether/.MainActivity
 
 Tap **Start VPN** on the phone. Accept the system VPN consent dialog on first run. Your phone's traffic now routes through the PC.
 
-### 4. Stop
+### Stop
 
 Tap **Stop VPN** on the phone, then on the PC:
 
