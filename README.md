@@ -55,8 +55,8 @@ The relay receives the packets, routes them to the internet via NAT (iptables MA
 ### 1. Build and start the relay
 
 ```bash
-git clone https://github.com/yourname/opentether
-cd opentether
+git clone https://github.com/pyd-07/NetcoN-OpenTether.git
+cd NetcoN-OpenTether
 
 go build -o relay ./...
 sudo ./relay
