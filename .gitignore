@@ -81,7 +81,7 @@ proguard/
 
 # VS Code
 # Uncomment the next line if you don't want to share editor settings
-# .vscode/
+.vscode/
 *.code-workspace
 
 # GoLand

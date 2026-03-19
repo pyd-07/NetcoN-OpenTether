@@ -1,17 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  USB Accessory filter for OpenTether.
-
-  When the PC relay runs in AOA mode it sends these identification strings
-  to the Android device (see relay/aoa_linux.go, var aoaStrings).
-  Android matches them here and automatically launches the OpenTether app
-  without showing any dialog after the first consent.
-
-  If you change the strings in aoaStrings on the relay side, update them
-  here too — otherwise Android will not auto-open the app.
--->
 <resources>
     <usb-accessory
+        xmlns:android="http://schemas.android.com/apk/res/android"
         android:manufacturer="OpenTether"
         android:model="OpenTether Relay"
         android:version="1.0" />

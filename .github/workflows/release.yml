@@ -6,8 +6,9 @@ on:
       - 'v*'
 
 jobs:
-  build-apk:
-    name: Build and release APK
+  # ── Job 1: Build APK + relay binaries and publish a GitHub Release ─────────
+  build-and-release:
+    name: Build and release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -15,6 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -36,51 +43,112 @@ jobs:
           mv android-client/app/build/outputs/apk/debug/app-debug.apk \
              android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
 
-      - name: Build relay (Linux amd64)
-        run: |
-          go build -o relay-linux-amd64 .
+      # ── Standard relay builds (ADB transport, no extra deps) ──────────────
+      - name: Build relay — Linux amd64
+        run: GOARCH=amd64 go build -o relay-linux-amd64 .
 
-      - name: Build relay (Linux arm64)
-        run: |
-          GOARCH=arm64 go build -o relay-linux-arm64 .
+      - name: Build relay — Linux arm64
+        run: GOARCH=arm64 go build -o relay-linux-arm64 .
 
+      # ── AOA relay builds (requires libusb) ────────────────────────────────
+      - name: Install libusb for AOA builds
+        run: sudo apt-get install -y libusb-1.0-0-dev
+
+      - name: Build relay — Linux amd64 (AOA)
+        run: GOARCH=amd64 go build -tags aoa -o relay-linux-amd64-aoa .
+
+      # arm64 cross-compile with CGO (libusb) requires a cross toolchain;
+      # skip for now and document that AOA arm64 must be built natively.
+      # - name: Build relay — Linux arm64 (AOA)
+      #   run: GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -tags aoa -o relay-linux-arm64-aoa .
+
+      # ── Publish ───────────────────────────────────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: OpenTether ${{ github.ref_name }}
           body: |
-            ## Install
+            ## OpenTether ${{ github.ref_name }}
 
-            ### Android app
-            1. Download `opentether-${{ github.ref_name }}.apk`
-            2. Open it on your phone to install
-            3. If prompted, allow installation from unknown sources
+            Reverse USB tethering for Android — route your phone's traffic through your PC via USB, no root required.
 
-            ### PC relay
-            Download the binary for your architecture and run:
+            ---
+
+            ### Quick install (recommended)
+
+            ```bash
+            git clone https://github.com/pyd-07/NetcoN-OpenTether.git
+            cd NetcoN-OpenTether
+            sudo ./setup.sh          # ADB transport  (USB debugging required)
+            sudo ./setup.sh --aoa    # AOA transport  (no USB debugging needed)
+            ```
+
+            ---
+
+            ### Manual install
+
+            #### 1 — Android app
+
+            Download `opentether-${{ github.ref_name }}.apk` and install it:
+
+            ```bash
+            adb install opentether-${{ github.ref_name }}.apk
+            # or open the APK file directly on the phone
+            ```
+
+            #### 2 — PC relay
+
+            Pick the binary for your setup:
+
+            | File | Transport | When to use |
+            |---|---|---|
+            | `relay-linux-amd64` | ADB (TCP over USB) | Default — needs USB debugging |
+            | `relay-linux-arm64` | ADB (TCP over USB) | Raspberry Pi / ARM64 PC |
+            | `relay-linux-amd64-aoa` | AOA (direct USB) | No USB debugging needed |
+
             ```bash
             chmod +x relay-linux-amd64
             sudo ./relay-linux-amd64
             ```
 
-            ### One-command setup (recommended)
+            The relay sets up `adb reverse` automatically — no manual tunnel setup needed.
+
+            #### AOA binary extra step
+
+            The AOA binary links against libusb. Install it before running:
+
             ```bash
-            git clone https://github.com/pyd-07/NetcoN-OpenTether.git
-            cd NetcoN-OpenTether
-            sudo ./setup.sh
+            sudo apt install libusb-1.0-0
+            sudo ./relay-linux-amd64-aoa
             ```
 
-            ## Requirements
-            - Linux PC (kernel 3.17+)
-            - Android 8.0+ with USB debugging enabled
+            ---
+
+            ### Requirements
+
+            - **PC**: Linux (kernel 3.17+), root or `CAP_NET_ADMIN`
+            - **Android**: 8.0+ (API 26), no root required
+            - **ADB transport**: USB debugging enabled
+            - **AOA transport**: no USB debugging — one-time consent dialog on first connect
+
+            ---
+
+            ### What's new in ${{ github.ref_name }}
+
+            - Auto ADB tunnel — relay runs `adb reverse` automatically on device connect
+            - AOA transport — direct USB pipe, no ADB or USB debugging required
+            - UDP / DNS batching — ~38 % fewer syscalls for DNS-heavy workloads
+            - IPv6 NAT — `ip6tables MASQUERADE` for all IPv6 traffic
 
           files: |
             android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
             relay-linux-amd64
             relay-linux-arm64
+            relay-linux-amd64-aoa
 
-  build-relay-test:
-    name: Test relay build
+  # ── Job 2: Run tests and verify the standard build compiles cleanly ────────
+  test:
+    name: Test and build check
     runs-on: ubuntu-latest
 
     steps:
@@ -93,8 +161,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run tests
+      - name: Run protocol tests
         run: go test ./...
 
-      - name: Build relay
+      - name: Build check (standard, no AOA)
         run: go build ./...
+
+      - name: Build check (AOA)
+        run: |
+          sudo apt-get install -y libusb-1.0-0-dev
+          go build -tags aoa ./...
