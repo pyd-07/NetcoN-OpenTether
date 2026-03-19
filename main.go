@@ -12,12 +12,13 @@ import (
 
 func main() {
 	cfg := relay.Config{
-		ListenAddr: "127.0.0.1:8765",
-		TunName:    "ot0",
-		TunAddr:    "10.0.0.2",
-		TunPrefix:  24,
-		AndroidIP:  "10.0.0.1",
-		MTU:        1500,
+		ListenAddr:      "127.0.0.1:8765",
+		TunName:         "ot0",
+		TunAddr:         "10.0.0.2",
+		TunPrefix:       24,
+		AndroidIP:       "10.0.0.1",
+		MTU:             1500,
+		DisableAdbWatch: false,
 	}
 
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr,
@@ -29,11 +30,13 @@ func main() {
 	flag.IntVar(&cfg.TunPrefix, "tun-prefix", cfg.TunPrefix,
 		"Prefix length for tun-addr (e.g. 24 for /24)")
 	flag.StringVar(&cfg.AndroidIP, "android-ip", cfg.AndroidIP,
-		"IP address that will be assigned to the Android VPN client")
+		"IP address assigned to the Android VPN client")
 	flag.StringVar(&cfg.OutIface, "out-iface", "",
-		"Outbound interface for NAT (empty = auto-detect from default route)")
+		"Outbound interface for NAT (empty = auto-detect)")
 	flag.IntVar(&cfg.MTU, "mtu", cfg.MTU,
 		"MTU for TUN interface and packet buffers")
+	flag.BoolVar(&cfg.DisableAdbWatch, "no-adb-watch", cfg.DisableAdbWatch,
+		"Disable automatic `adb reverse` setup (run it manually instead)")
 	flag.BoolVar(&cfg.Verbose, "v", false,
 		"Enable per-packet debug logging")
 	flag.Parse()
@@ -43,7 +46,6 @@ func main() {
 		log.Fatalf("startup failed: %v", err)
 	}
 
-	// Catch SIGINT/SIGTERM for graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

@@ -1,16 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- ── Permissions ──────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!--
+      AOA transport: required to open USB accessories.
+      android.permission.USB_PERMISSION is granted automatically by the system
+      when the user taps "OK" in the accessory consent dialog; we don't need to
+      request it explicitly.
+    -->
+    <uses-feature
+        android:name="android.hardware.usb.accessory"
+        android:required="false" />
+    <!--
+      required="false" means the app is still listed on devices without USB
+      host support (e.g. some budget phones). The AOA transport simply won't
+      be available there; the ADB-based transport still works.
+    -->
 
     <application
         android:allowBackup="false"
         android:label="OpenTether"
         android:theme="@style/Theme.OpenTether">
 
+        <!-- ── Main activity ──────────────────────────────────────────── -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -18,8 +35,26 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              AOA: when the PC relay connects via USB and Android recognises
+              the accessory strings, the system sends this intent to the app.
+              Declaring it on MainActivity means the app opens (or is brought
+              to the foreground) automatically — the user just sees the UI
+              and can tap "Start VPN".
+
+              The usb_accessory_filter.xml lists the manufacturer/model/version
+              strings that must match those sent by the relay.
+            -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/usb_accessory_filter" />
         </activity>
 
+        <!-- ── VPN service ────────────────────────────────────────────── -->
         <service
             android:name=".vpn.OpenTetherVpnService"
             android:exported="true"
@@ -33,7 +68,6 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="OpenTether reverse USB tethering" />
-
         </service>
 
     </application>
