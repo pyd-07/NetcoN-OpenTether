@@ -2,7 +2,7 @@
 <resources>
     <usb-accessory
         xmlns:android="http://schemas.android.com/apk/res/android"
-        android:manufacturer="OpenTether"
-        android:model="OpenTether Relay"
-        android:version="1.0" />
+        manufacturer="OpenTether"
+        model="OpenTether Relay"
+        version="1" />
 </resources>
