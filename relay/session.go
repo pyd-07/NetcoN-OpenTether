@@ -12,37 +12,37 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// session bridges one Android TCP connection to the shared TUN device.
+// session bridges one Android connection (TCP or AOA) to the shared TUN device.
 //
 // Data path (Android → internet):
 //
-//	Android TCP conn → ReadFrame → Frame.Payload (raw IP pkt) → TUN.Write → kernel → internet
+//	Android conn → ReadFrame → Frame.Payload (raw IP pkt) → TUN.Write → kernel → internet
 //
 // Data path (internet → Android):
 //
-//	internet → kernel → TUN.Read → raw IP pkt → FlushWriter → Android TCP conn
+//	internet → kernel → TUN.Read → raw IP pkt → FrameWriter → Android conn
 //
-// UDP/DNS optimisation
-// --------------------
-// Raw IP packets from the TUN are wrapped in OTP frames and forwarded to the
-// Android client over a single TCP stream. Without batching, every small
-// UDP packet (DNS reply, QUIC ACK, ~100 B) triggers an individual syscall
-// and a TCP segment — wasteful at hundreds of packets per second.
+// Write strategy
+// ──────────────
+// Two FrameWriter implementations are available, selected by cfg.AOAMode:
 //
-// FlushWriter buffers outgoing frames and flushes them either:
-//   - Immediately, when a large frame (≥ 512 B) arrives (TCP bulk / video).
-//   - On a 1 ms timer, which bounds the extra latency for small UDP frames.
+//	TCP  (AOAMode=false): FlushWriter — batches small frames (DNS, QUIC ACKs)
+//	                      under a 1 ms ticker. ~40% fewer syscalls on Pixel 6/USB2.
 //
-// Benchmark (Pixel 6, USB 2.0): ~40 % fewer syscalls, +0 ms p99 for DNS.
+//	AOA  (AOAMode=true):  DirectWriter — sends each frame as one Write call =
+//	                      one USB bulk OUT transfer. Prevents the frame corruption
+//	                      that occurs when Android's USB accessory driver returns
+//	                      one USB transfer per read() and drops unread bytes from
+//	                      a transfer that contained multiple batched frames.
 type session struct {
 	conn net.Conn
 	tun  *TunDevice
 	cfg  Config
 
-	// fw serialises all writes to conn with internal locking.
-	// Replaces the old wmu + direct WriteFrame(s.conn, …) pattern.
-	fw   *FlushWriter
-	fwMu sync.Mutex // guards fw assignment; fw itself is safe after init
+	// fw is the frame writer for the internet→Android direction.
+	// Initialised by tunToAndroid; accessed by sendPong via fwMu.
+	fw   FrameWriter
+	fwMu sync.Mutex
 }
 
 func newSession(conn net.Conn, tun *TunDevice, cfg Config) *session {
@@ -54,7 +54,7 @@ func (s *session) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Closing the conn unblocks the goroutine that is blocked on Read/Write.
+	// Closing conn unblocks any goroutine blocked on Read/Write.
 	go func() {
 		<-ctx.Done()
 		s.conn.Close()
@@ -79,7 +79,7 @@ func (s *session) run(ctx context.Context) {
 	logf("session with %s ended", s.conn.RemoteAddr())
 }
 
-// androidToTun reads OTP frames from the TCP connection and writes their
+// androidToTun reads OTP frames from the Android connection and writes their
 // raw IP payloads into the TUN device.
 func (s *session) androidToTun(ctx context.Context) {
 	r := bufio.NewReaderSize(s.conn, s.cfg.MTU*4)
@@ -109,9 +109,7 @@ func (s *session) androidToTun(ctx context.Context) {
 			}
 
 		case MsgPing:
-			// Reply on the FlushWriter so the pong is flushed with the next
-			// data batch (or within 1 ms by the ticker). The ping/pong RTT
-			// is used for latency monitoring — 1 ms slack is acceptable.
+			// Reply asynchronously so a slow pong doesn't stall the read loop.
 			go s.sendPong()
 
 		case MsgClose:
@@ -127,25 +125,33 @@ func (s *session) androidToTun(ctx context.Context) {
 	}
 }
 
-// tunToAndroid reads raw IP packets from the TUN device and sends them to the
-// Android client wrapped in OTP frames.
+// tunToAndroid reads raw IP packets from the TUN device and sends them to
+// Android wrapped in OTP frames.
 //
-// FlushWriter batches small frames (UDP/DNS) and flushes them on a 1 ms ticker,
-// reducing syscall count significantly for DNS-heavy or QUIC traffic.
+// Write strategy:
+//   - TCP mode:  FlushWriter — batches small frames under a 1 ms ticker.
+//   - AOA mode:  DirectWriter — one Write per frame = one USB transfer.
+//     Prevents the payload_length corruption caused by Android USB accessory
+//     drivers that return one USB transfer per read() without buffering remainders.
 //
 // The unix.Poll loop with a 200 ms timeout keeps ctx cancellation responsive
 // even when no packets are arriving (TUN fds don't use Go's netpoller).
 func (s *session) tunToAndroid(ctx context.Context) {
 	buf := make([]byte, s.cfg.MTU+4)
-	fd := s.tun.Fd()
+	fd  := s.tun.Fd()
 
-	// Create the FlushWriter now that we are on the tunToAndroid goroutine.
-	// largeThreshold=512: MTU-sized packets (TCP bulk, video) flush immediately;
-	// small packets (DNS, QUIC ACKs) batch under the 1 ms ticker.
-	fw := NewFlushWriter(ctx, s.conn, 32*1024, 512, 1*time.Millisecond)
+	// Select write strategy based on transport type.
+	var fw FrameWriter
+	if s.cfg.AOAMode {
+		// AOA: one USB transfer per frame — no batching.
+		fw = NewDirectWriter(s.conn)
+	} else {
+		// TCP: batch small frames under a 1 ms ticker.
+		fw = NewFlushWriter(ctx, s.conn, 32*1024, 512, 1*time.Millisecond)
+	}
 	defer fw.Close()
 
-	// Store fw so sendPong can reach it.
+	// Store fw so sendPong can access it.
 	s.fwMu.Lock()
 	s.fw = fw
 	s.fwMu.Unlock()
@@ -210,7 +216,7 @@ func (s *session) sendPong() {
 	s.fwMu.Unlock()
 
 	if fw == nil {
-		return // tunToAndroid hasn't initialised fw yet
+		return // tunToAndroid hasn't initialised fw yet — pong silently dropped
 	}
 	if err := fw.Send(Frame{MsgType: MsgPong}); err != nil {
 		debugf("sendPong: %v", err)

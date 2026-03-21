@@ -39,8 +39,31 @@ func main() {
 		"Disable automatic `adb reverse` setup (run it manually instead)")
 	flag.BoolVar(&cfg.Verbose, "v", false,
 		"Enable per-packet debug logging")
+	aoa := flag.Bool("aoa", false,
+		"Use USB Accessory (AOA) mode — no adb or USB debugging required.\n"+
+			"Build with -tags aoa and install libusb: apt install libusb-1.0-0-dev")
 	flag.Parse()
 
+	// ── AOA mode ──────────────────────────────────────────────────────────
+	// Bypasses the TCP listener entirely. The relay negotiates directly with
+	// the Android device over USB bulk endpoints.
+	if *aoa {
+		stop := make(chan struct{})
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			s := <-sig
+			log.Printf("received %v — shutting down", s)
+			close(stop)
+		}()
+
+		if err := relay.RunAOA(cfg, stop); err != nil {
+			log.Fatalf("AOA error: %v", err)
+		}
+		return
+	}
+
+	// ── TCP mode (default) ────────────────────────────────────────────────
 	srv, err := relay.NewServer(cfg)
 	if err != nil {
 		log.Fatalf("startup failed: %v", err)

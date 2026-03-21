@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    app_name  — required by AndroidManifest.xml android:label
+    All other strings — referenced by activity_main.xml views.
+    This layout is the legacy XML UI; it coexists with the Compose UI
+    and must compile even though it is no longer the primary interface.
+-->
 <resources>
     <string name="app_name">OpenTether</string>
-    <string name="status_connected">Connected via USB</string>
+
+    <!-- activity_main.xml: status row -->
     <string name="status_idle">Idle</string>
-    <string name="status_hint">Tap Start VPN to route your phone\'s traffic through this PC.</string>
+    <string name="status_connected">Connected via USB</string>
+
+    <!-- activity_main.xml: stat card labels -->
     <string name="label_download">Download</string>
     <string name="label_upload">Upload</string>
     <string name="label_throughput">Throughput — last 30 s</string>
@@ -11,18 +20,8 @@
     <string name="label_total_up">Total ↑</string>
     <string name="label_rtt">RTT</string>
     <string name="label_active_connections">Active connections</string>
+
+    <!-- activity_main.xml: buttons -->
     <string name="action_start">Start VPN</string>
     <string name="action_stop">Stop VPN</string>
-
-    <!-- Legacy keys kept for compatibility -->
-    <string name="hero_eyebrow">OpenTether</string>
-    <string name="hero_title">Reverse USB tethering</string>
-    <string name="hero_description">Route your phone\'s internet traffic through your PC via USB — no root required.</string>
-    <string name="chip_usb">USB linked</string>
-    <string name="chip_secure">VPN ready</string>
-    <string name="status_label">Connection status</string>
-    <string name="quick_start_title">Quick start</string>
-    <string name="quick_start_step_one">1. Connect device over USB.</string>
-    <string name="quick_start_step_two">2. Tap Start VPN and accept the system dialog.</string>
-    <string name="quick_start_step_three">3. Tap Stop VPN to end the session.</string>
 </resources>

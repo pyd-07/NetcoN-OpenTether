@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 )
 
-// Server owns the TUN device, TCP listener, and ADB watcher, and manages the
-// lifecycle of Android client sessions.
+// Server owns the TUN device, TCP listener, and ADB watcher, and manages
+// the lifecycle of Android client sessions.
 type Server struct {
 	cfg      Config
 	tun      *TunDevice
@@ -20,7 +20,7 @@ type Server struct {
 }
 
 // NewServer creates the TUN interface, configures networking, and starts
-// the TCP listener. Returns an error if any of these steps fail.
+// the TCP listener. Returns an error if any step fails.
 // Must be run as root (or with CAP_NET_ADMIN + CAP_NET_RAW).
 func NewServer(cfg Config) (*Server, error) {
 	setVerbose(cfg.Verbose)
@@ -57,21 +57,19 @@ func NewServer(cfg Config) (*Server, error) {
 
 // Run accepts Android client connections and handles reconnections automatically.
 //
-// If cfg.AutoAdb is true (the default when adb is on PATH), an AdbWatcher is
-// started in the background. It polls `adb devices` every 2 s and runs
-// `adb reverse tcp:PORT tcp:PORT` automatically whenever a device appears —
-// no manual setup step needed.
+// If cfg.DisableAdbWatch is false (the default), an AdbWatcher is started in
+// the background. It polls `adb devices` every 2 s and runs
+// `adb reverse tcp:PORT tcp:PORT` automatically whenever a device appears.
 //
 // Blocks until Stop() is called.
 func (s *Server) Run() error {
 	defer s.cleanup()
 
-	// ── Auto ADB tunnel ──────────────────────────────────────────────────
 	if !s.cfg.DisableAdbWatch {
 		port := listenPort(s.cfg.ListenAddr)
 		watcher := NewAdbWatcher(port)
 		go watcher.Watch(s.ctx)
-		logf("ADB watcher started — will configure `adb reverse tcp:%d tcp:%d` automatically", port, port)
+		logf("ADB watcher started — `adb reverse tcp:%d tcp:%d` runs automatically", port, port)
 	}
 
 	logf("ready — waiting for Android on %s", s.cfg.ListenAddr)
@@ -111,22 +109,17 @@ func (s *Server) cleanup() {
 	logf("shutdown complete")
 }
 
-// listenPort parses the port number from a "host:port" address string.
+// listenPort extracts the port number from a "host:port" address string.
 // Falls back to 8765 on any parse error.
 func listenPort(addr string) int {
-	var host string
-	var port int
-	if _, err := fmt.Sscanf(addr, "%s", &host); err != nil {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		warnf("listenPort: could not parse %q: %v — defaulting to 8765", addr, err)
 		return 8765
 	}
-	// addr is "host:port"
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			fmt.Sscanf(addr[i+1:], "%d", &port)
-			break
-		}
-	}
-	if port == 0 {
+	var port int
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil || port <= 0 || port > 65535 {
+		warnf("listenPort: invalid port %q — defaulting to 8765", portStr)
 		return 8765
 	}
 	return port

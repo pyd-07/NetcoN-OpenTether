@@ -4,49 +4,61 @@ import android.net.VpnService
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
-import android.util.Log
 import com.opentether.Constants
 import com.opentether.StatsHolder
+import com.opentether.data.TunnelTransport
+import com.opentether.logging.AppLogger
 import com.opentether.model.OtpFrame
+import com.opentether.runtime.TunnelRuntimeHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.OutputStream
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "OT/UsbTunnelClient"
 
 /**
- * Manages the TCP socket connection to the relay over the ADB reverse tunnel,
- * with UDP/DNS packet batching for improved throughput.
+ * Manages the TCP socket connection to the relay over the ADB reverse tunnel.
+ *
+ * Session lifecycle
+ * ─────────────────
+ * [runSession] launches four coroutines in an isolated [Job]:
+ *   sendJob   — drains the outbound channel, writes OTP DATA frames
+ *   recvJob   — reads OTP frames from the relay; measures RTT on MSG_PONG
+ *   pingJob   — sends MSG_PING every [PING_INTERVAL_MS] ms
+ *   flushJob  — flushes the shared [BufferedOutputStream] every [FLUSH_INTERVAL_MS] ms
+ *
+ * The session ends as soon as *either* sendJob or recvJob exits (connection
+ * lost or protocol error). The remaining coroutines are cancelled, the fd is
+ * closed, and the outer loop reconnects.
  *
  * UDP / DNS optimisation
  * ──────────────────────
- * Each raw IP packet read from the TUN fd is wrapped in a 12-byte OTP header
- * and written to the TCP stream. Without buffering, one write() call per packet
- * means one kernel syscall and (often) one TCP segment per frame — expensive at
- * hundreds of small UDP packets per second.
+ * All four coroutines share one [BufferedOutputStream] (32 KB). Writes are
+ * guarded by `synchronized(bos)`. Large packets (≥ [FLUSH_THRESHOLD] bytes)
+ * are flushed immediately; smaller packets are batched and drained by
+ * flushJob, bounding added latency to [FLUSH_INTERVAL_MS] ms.
  *
- * This class wraps the TCP output stream in a [BufferedOutputStream] and flushes
- * it either immediately (for large packets ≥ [FLUSH_THRESHOLD] bytes) or on a
- * [FLUSH_INTERVAL_MS] ms timer (for small packets such as DNS queries).
- *
- *  • DNS query (~100 B) → buffered, flushed within [FLUSH_INTERVAL_MS] ms.
- *  • Large TCP/video frame (≥ 512 B) → flushed immediately, zero added latency.
- *
- * Benchmark on Pixel 6, USB 2.0: ~38 % fewer write() syscalls for DNS-heavy
- * workloads; p99 DNS latency unchanged.
+ * Live RTT measurement
+ * ────────────────────
+ * pingJob records a timestamp immediately before sending each MSG_PING.
+ * When recvJob sees the corresponding MSG_PONG it computes
+ * `now − pingTimestamp` and writes the result to [StatsHolder.rttMs].
  */
 class UsbTunnelClient(
     private val outbound:   Channel<ByteArray>,
@@ -56,10 +68,18 @@ class UsbTunnelClient(
     private val connIdCounter = AtomicInteger(1)
 
     fun start(scope: CoroutineScope): Job = scope.launch(Dispatchers.IO) {
-        Log.i(TAG, "started — will connect to ${Constants.RELAY_HOST}:${Constants.RELAY_PORT}")
+        AppLogger.i(TAG, "started — will connect to ${Constants.RELAY_HOST}:${Constants.RELAY_PORT}")
+        TunnelRuntimeHolder.onTransportWaiting(
+            transport = TunnelTransport.ADB,
+            detail    = "Waiting for relay on ${Constants.RELAY_HOST}:${Constants.RELAY_PORT}",
+        )
 
         while (isActive) {
-            Log.i(TAG, "connecting to relay...")
+            AppLogger.i(TAG, "connecting to relay...")
+            TunnelRuntimeHolder.onTransportConnecting(
+                transport = TunnelTransport.ADB,
+                detail    = "Dialing ${Constants.RELAY_HOST}:${Constants.RELAY_PORT}",
+            )
 
             var fd: FileDescriptor? = null
             try {
@@ -67,88 +87,105 @@ class UsbTunnelClient(
 
                 val intFd = intFd(fd)
                 if (intFd == -1) {
-                    Log.e(TAG, "could not read native fd — will retry")
+                    AppLogger.e(TAG, "could not read native fd — will retry")
                     delay(Constants.RECONNECT_DELAY_MS)
                     continue
                 }
-
                 if (!vpnService.protect(intFd)) {
-                    Log.e(TAG, "protect(int) returned false — will retry")
+                    AppLogger.e(TAG, "protect(int) returned false — will retry")
                     delay(Constants.RECONNECT_DELAY_MS)
                     continue
                 }
 
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, OsConstants.TCP_NODELAY, 1)
                 Os.connect(fd, InetAddress.getByName(Constants.RELAY_HOST), Constants.RELAY_PORT)
-                Log.i(TAG, "connected to relay")
+                AppLogger.i(TAG, "connected to relay")
+                TunnelRuntimeHolder.onTransportConnected(
+                    transport = TunnelTransport.ADB,
+                    detail    = "Relay session established on ${Constants.RELAY_HOST}:${Constants.RELAY_PORT}",
+                )
 
-                val input  = DataInputStream(FileInputStream(fd))
-                val output = FileOutputStream(fd)
-                runSession(scope, fd, input, output)
+                runSession(fd, DataInputStream(FileInputStream(fd)), FileOutputStream(fd))
 
             } catch (e: ErrnoException) {
                 if (!isActive) return@launch
-                Log.w(TAG, "OS error: ${e.message} (errno=${e.errno})")
+                AppLogger.w(TAG, "OS error: ${e.message} (errno=${e.errno})")
             } catch (e: IOException) {
                 if (!isActive) return@launch
-                Log.w(TAG, "IO error: ${e.message}")
+                AppLogger.w(TAG, "IO error: ${e.message}")
             } catch (e: Exception) {
                 if (!isActive) return@launch
-                Log.e(TAG, "unexpected: ${e.message}")
+                AppLogger.e(TAG, "unexpected: ${e.message}")
+                TunnelRuntimeHolder.onError(TunnelTransport.ADB, "Unexpected tunnel error: ${e.message}")
             } finally {
-                fd?.let { closeFd(it) }
+                fd?.let { closeFd(it) }  // no-op if runSession already closed it
+                StatsHolder.rttMs.set(0)
             }
 
             if (!isActive) return@launch
-            Log.i(TAG, "disconnected — retrying in ${Constants.RECONNECT_DELAY_MS}ms")
+            AppLogger.i(TAG, "disconnected — retrying in ${Constants.RECONNECT_DELAY_MS}ms")
+            TunnelRuntimeHolder.onTransportDisconnected(
+                transport = TunnelTransport.ADB,
+                detail    = "Relay disconnected, retrying in ${Constants.RECONNECT_DELAY_MS} ms",
+            )
             delay(Constants.RECONNECT_DELAY_MS)
         }
     }
 
+    // ─── Session ──────────────────────────────────────────────────────────
+
+    /**
+     * Runs send, receive, ping, and flush coroutines for one relay connection.
+     *
+     * Blocks until either the send or receive path exits, then cancels all
+     * remaining coroutines, closes [fd] to unblock any pending reads, and
+     * returns so the caller can reconnect.
+     *
+     * The isolated [sessionJob] ensures cancellation does not escape to the
+     * parent service scope.
+     */
     private suspend fun runSession(
-        scope:  CoroutineScope,
         fd:     FileDescriptor,
         input:  DataInputStream,
         output: FileOutputStream,
     ) {
-        val decoder      = PacketDecoder(input)
-        val sessionScope = CoroutineScope(scope.coroutineContext)
+        val decoder       = PacketDecoder(input)
+        val bos           = BufferedOutputStream(output, SEND_BUF_SIZE)
+        val pingTimestamp = AtomicLong(0L)
 
-        val sendJob = sessionScope.launch(Dispatchers.IO) { sendLoop(output) }
-        val recvJob = sessionScope.launch(Dispatchers.IO) { receiveLoop(decoder) }
+        val sessionJob   = Job()
+        val sessionScope = CoroutineScope(Dispatchers.IO + sessionJob)
+
+        val sendJob  = sessionScope.launch { sendLoop(bos) }
+        val recvJob  = sessionScope.launch { receiveLoop(decoder, pingTimestamp) }
+        val pingJob  = sessionScope.launch { pingLoop(bos, pingTimestamp) }
+        val flushJob = sessionScope.launch { flushLoop(bos) }
 
         try {
-            sendJob.join()
+            // Suspend until either the outbound send path or inbound receive
+            // path exits — either means the connection is gone or broken.
+            select<Unit> {
+                sendJob.onJoin { }
+                recvJob.onJoin { }
+            }
         } finally {
-            sendJob.cancel()
-            recvJob.cancel()
-            closeFd(fd)
-            recvJob.join()
+            // NonCancellable: the outer coroutine may itself be cancelled
+            // (e.g. VPN stopped). We still need to clean up fully.
+            withContext(NonCancellable) {
+                sessionJob.cancel()  // signal all coroutines to stop
+                closeFd(fd)          // unblock any readFully waiting on the stream
+                sendJob.join()
+                recvJob.join()
+                pingJob.join()
+                flushJob.join()
+            }
         }
     }
 
-    // ─── Send loop with UDP batching ──────────────────────────────────────
+    // ─── Send loop ────────────────────────────────────────────────────────
 
-    private suspend fun sendLoop(out: OutputStream) {
-        Log.d(TAG, "sendLoop started")
-
-        // Buffer outgoing frames so small UDP packets are coalesced into fewer
-        // TCP segments (= fewer syscalls, less TCP header overhead).
-        val bos = BufferedOutputStream(out, SEND_BUF_SIZE)
-
-        // Background coroutine: flush the buffer on a regular heartbeat so small
-        // frames (DNS, QUIC ACKs) don't sit idle longer than FLUSH_INTERVAL_MS.
-        val flushJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                delay(FLUSH_INTERVAL_MS)
-                try {
-                    synchronized(bos) { bos.flush() }
-                } catch (_: IOException) {
-                    break // TCP gone; sendLoop will detect this too
-                }
-            }
-        }
-
+    private suspend fun sendLoop(bos: BufferedOutputStream) {
+        AppLogger.d(TAG, "sendLoop started")
         try {
             for (rawPacket in outbound) {
                 val connId = connIdCounter.getAndIncrement()
@@ -156,56 +193,112 @@ class UsbTunnelClient(
 
                 synchronized(bos) {
                     bos.write(frame)
-                    // Large packet: flush immediately so the relay sees it without
-                    // waiting for the next timer tick. DNS and small UDP packets
-                    // stay buffered and are drained by the flush coroutine.
-                    if (rawPacket.size >= FLUSH_THRESHOLD) {
-                        bos.flush()
-                    }
+                    // Large packets flush immediately — TCP bulk / video.
+                    // Small packets wait for flushLoop's ticker.
+                    if (rawPacket.size >= FLUSH_THRESHOLD) bos.flush()
                 }
 
                 StatsHolder.bytesUpSec.addAndGet(rawPacket.size.toLong())
                 StatsHolder.totalUp.addAndGet(rawPacket.size.toLong())
-                Log.d(TAG, "→ relay ${rawPacket.size}B  conn_id=$connId")
+                AppLogger.d(TAG, "→ relay ${rawPacket.size}B  conn_id=$connId")
             }
         } catch (e: IOException) {
-            Log.w(TAG, "sendLoop: ${e.message}")
+            AppLogger.w(TAG, "sendLoop: ${e.message}")
         } finally {
-            flushJob.cancel()
-            Log.d(TAG, "sendLoop stopped")
+            AppLogger.d(TAG, "sendLoop stopped")
+        }
+    }
+
+    // ─── Flush loop ───────────────────────────────────────────────────────
+
+    /**
+     * Flushes [bos] on a regular heartbeat so small frames (DNS, QUIC ACKs)
+     * don't sit in the buffer longer than [FLUSH_INTERVAL_MS] ms.
+     *
+     * Runs as a separate coroutine inside the session scope; cancelled when
+     * the session ends.
+     */
+    private suspend fun flushLoop(bos: BufferedOutputStream) {
+        try {
+            while (true) {
+                delay(FLUSH_INTERVAL_MS)
+                synchronized(bos) { bos.flush() }
+            }
+        } catch (_: IOException) {
+            // Stream gone; sendLoop will detect the same error and exit.
+        }
+    }
+
+    // ─── Ping loop ────────────────────────────────────────────────────────
+
+    /**
+     * Sends MSG_PING every [PING_INTERVAL_MS] ms and records the send
+     * timestamp in [pingTimestamp].
+     *
+     * The timestamp is set *before* writing so that [receiveLoop] never reads
+     * a zero value when the relay responds very quickly (sub-millisecond USB).
+     */
+    private suspend fun pingLoop(bos: BufferedOutputStream, pingTimestamp: AtomicLong) {
+        AppLogger.d(TAG, "pingLoop started")
+        try {
+            while (true) {
+                delay(PING_INTERVAL_MS)
+                // Set timestamp before write — if the relay responds before
+                // we exit the synchronized block, the RTT is still valid.
+                pingTimestamp.set(System.currentTimeMillis())
+                val frame = PacketEncoder.encodeControl(msgType = Constants.MSG_PING)
+                synchronized(bos) {
+                    bos.write(frame)
+                    bos.flush()  // flush immediately — RTT accuracy matters
+                }
+                AppLogger.d(TAG, "→ relay PING")
+            }
+        } catch (_: IOException) {
+            AppLogger.w(TAG, "pingLoop: stream gone")
+        } finally {
+            AppLogger.d(TAG, "pingLoop stopped")
         }
     }
 
     // ─── Receive loop ─────────────────────────────────────────────────────
 
-    private suspend fun receiveLoop(decoder: PacketDecoder) {
-        Log.d(TAG, "receiveLoop started")
+    private suspend fun receiveLoop(decoder: PacketDecoder, pingTimestamp: AtomicLong) {
+        AppLogger.d(TAG, "receiveLoop started")
         try {
             while (true) {
                 val frame: OtpFrame = decoder.readFrame()
                 when (frame.msgType) {
                     Constants.MSG_DATA -> {
                         val payload = frame.payload ?: continue
-                        Log.d(TAG, "← relay ${payload.size}B  conn_id=${frame.connId}")
+                        AppLogger.d(TAG, "← relay ${payload.size}B  conn_id=${frame.connId}")
                         StatsHolder.bytesDownSec.addAndGet(payload.size.toLong())
                         StatsHolder.totalDown.addAndGet(payload.size.toLong())
                         inbound.send(payload)
                     }
-                    Constants.MSG_PING  -> Log.d(TAG, "← relay PING")
-                    Constants.MSG_CLOSE -> Log.d(TAG, "← relay CLOSE conn_id=${frame.connId}")
+                    Constants.MSG_PONG -> {
+                        val sentAt = pingTimestamp.get()
+                        if (sentAt > 0L) {
+                            val rtt = (System.currentTimeMillis() - sentAt).toInt().coerceAtLeast(0)
+                            StatsHolder.rttMs.set(rtt)
+                            AppLogger.d(TAG, "← relay PONG  rtt=${rtt}ms")
+                        }
+                    }
+                    Constants.MSG_CLOSE -> AppLogger.d(TAG, "← relay CLOSE conn_id=${frame.connId}")
                     Constants.MSG_ERROR -> {
                         val msg = frame.payload?.let { String(it, Charsets.UTF_8) } ?: "(none)"
-                        Log.e(TAG, "← relay ERROR: $msg")
+                        AppLogger.e(TAG, "← relay ERROR: $msg")
+                        TunnelRuntimeHolder.onError(TunnelTransport.ADB, "Relay error: $msg")
                     }
-                    else -> Log.w(TAG, "← unknown type 0x${frame.msgType.toString(16)}")
+                    else -> AppLogger.w(TAG, "← unknown type 0x${frame.msgType.toString(16)}")
                 }
             }
         } catch (e: IOException) {
-            Log.w(TAG, "receiveLoop: ${e.message}")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "receiveLoop: malformed frame: ${e.message}")
+            // Covers both real IO errors and PacketDecoder's malformed-frame IOException.
+            // In both cases the stream is unrecoverable; exit cleanly so the session
+            // select fires and triggers a reconnect.
+            AppLogger.w(TAG, "receiveLoop: ${e.message}")
         } finally {
-            Log.d(TAG, "receiveLoop stopped")
+            AppLogger.d(TAG, "receiveLoop stopped")
         }
     }
 
@@ -216,7 +309,7 @@ class UsbTunnelClient(
         f.isAccessible = true
         f.getInt(fd)
     } catch (e: Exception) {
-        Log.e(TAG, "intFd reflection failed: ${e.message}")
+        AppLogger.e(TAG, "intFd reflection failed: ${e.message}")
         -1
     }
 
@@ -225,13 +318,9 @@ class UsbTunnelClient(
     }
 
     companion object {
-        /** Payloads at or above this size trigger an immediate flush (bytes). */
-        private const val FLUSH_THRESHOLD = 512
-
-        /** Maximum time a small frame waits in the buffer before flushing (ms). */
-        private const val FLUSH_INTERVAL_MS = 2L
-
-        /** Internal buffer capacity for BatchedOutputStream (bytes). */
-        private const val SEND_BUF_SIZE = 32 * 1024
+        private const val FLUSH_THRESHOLD   = 512    // bytes; above → flush immediately
+        private const val FLUSH_INTERVAL_MS = 2L     // ms; max added latency for small frames
+        private const val SEND_BUF_SIZE     = 32_768 // bytes; internal BufferedOutputStream buffer
+        private const val PING_INTERVAL_MS  = 2_000L // ms; how often to probe RTT
     }
 }

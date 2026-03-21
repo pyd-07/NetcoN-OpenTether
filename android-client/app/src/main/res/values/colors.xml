@@ -1,41 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Single source of truth for all color tokens.
+
+    styles.xml deliberately contains NO <color> elements — only <style>.
+    Every @color reference in layouts, drawables, and themes resolves here.
+-->
 <resources>
-    <!-- Core backgrounds -->
-    <color name="backgroundDark">#111111</color>
-    <color name="surfaceDark">#1A1A1A</color>
-    <color name="cardDark">#1E1E1E</color>
+    <!-- Backgrounds -->
+    <color name="backgroundDark">#0D1117</color>
+    <color name="backgroundTop">#0D1117</color>
+    <color name="backgroundBottom">#0D1117</color>
+    <color name="surfaceDark">#161B22</color>
+    <color name="surfaceAlt">#1C2128</color>
 
     <!-- Brand / action -->
-    <color name="primary">#3C3489</color>
-    <color name="primaryDark">#2B2566</color>
+    <color name="primary">#1F6FEB</color>
+    <color name="primaryDark">#1F6FEB</color>
+    <color name="secondary">#58A6FF</color>
 
     <!-- Status / chart -->
-    <color name="connectedGreen">#1D9E75</color>
-    <color name="chartUpload">#534AB7</color>
+    <color name="connectedGreen">#2EA043</color>
+    <color name="chartUpload">#58A6FF</color>
+    <color name="warningYellow">#D29922</color>
+    <color name="errorRed">#F85149</color>
 
     <!-- Text -->
-    <color name="textPrimary">#F0F0F0</color>
-    <color name="textSecondary">#888888</color>
-    <color name="textTertiary">#555555</color>
-    <color name="textMuted">#666666</color>
+    <color name="textPrimary">#E6EDF3</color>
+    <color name="textSecondary">#8B949E</color>
+    <color name="textTertiary">#6E7681</color>
+    <color name="textMuted">#6E7681</color>
+    <color name="buttonText">#E6EDF3</color>
 
-    <!-- Button label on primary -->
-    <color name="buttonText">#EEEDFE</color>
+    <!-- Surfaces / glows -->
+    <color name="cardDark">#161B22</color>
+    <color name="glowBlue">#221F6FEB</color>
+    <color name="chipBg">#1F2937</color>
 
-    <!-- Borders (very subtle on dark) -->
-    <color name="outline">#2A2A2A</color>
-
-    <!-- Legacy names kept so other files compile unchanged -->
-    <color name="backgroundTop">#111111</color>
-    <color name="backgroundBottom">#111111</color>
-    <color name="primary_legacy">#1F6FEB</color>
-    <color name="secondary">#2A8BF2</color>
-    <color name="surface">#1E1E1E</color>
-    <color name="surfaceSoft">#1E1E1E</color>
-    <color name="surfaceWarm">#1E1E1E</color>
-    <color name="chipBg">#2B2566</color>
-    <color name="chipText">#EEEDFE</color>
-    <color name="glowBlue">#22534AB7</color>
-    <color name="textPrimary_legacy">#F0F0F0</color>
-    <color name="textSecondary_legacy">#888888</color>
+    <!-- Borders -->
+    <color name="outline">#30363D</color>
 </resources>

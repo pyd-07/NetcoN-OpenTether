@@ -1,17 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        OpenTether uses Jetpack Compose with MaterialTheme, so most Material 2
+        theme attributes are irrelevant. This file only controls the window
+        chrome (status bar, navigation bar) before Compose content is drawn.
+    -->
     <style name="Theme.OpenTether" parent="Theme.MaterialComponents.NoActionBar">
+        <!-- Primary brand color (also applied to action-mode toolbar) -->
         <item name="colorPrimary">@color/primary</item>
-        <item name="colorPrimaryVariant">@color/primaryDark</item>
-        <item name="colorSecondary">@color/connectedGreen</item>
-        <item name="colorOnPrimary">@color/buttonText</item>
+        <!-- colorPrimaryVariant used by legacy widgets; keep in sync with primary -->
+        <item name="colorPrimaryVariant">@color/primary</item>
+        <item name="colorSecondary">@color/secondary</item>
+        <item name="colorOnPrimary">@color/textPrimary</item>
         <item name="colorOnSecondary">@color/textPrimary</item>
-        <item name="colorSurface">@color/cardDark</item>
+        <item name="colorSurface">@color/surfaceDark</item>
         <item name="colorOnSurface">@color/textPrimary</item>
+
+        <!-- Window chrome -->
         <item name="android:windowBackground">@color/backgroundDark</item>
         <item name="android:statusBarColor">@color/backgroundDark</item>
         <item name="android:navigationBarColor">@color/backgroundDark</item>
-        <!-- Keep status-bar icons light (text on dark bg) -->
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

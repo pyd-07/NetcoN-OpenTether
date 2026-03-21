@@ -1,5 +1,6 @@
 {
     "gopls": {
         "buildFlags": ["-tags=linux,aoa"]
-    }
+    },
+    "java.configuration.updateBuildConfiguration": "automatic"
 }

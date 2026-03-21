@@ -20,4 +20,6 @@ data class ConnectionEntry(
     val host:   String,
     val mbps:   Float,
     val active: Boolean,
+    val downloadBytesPerSec: Long = 0,
+    val uploadBytesPerSec: Long = 0,
 )

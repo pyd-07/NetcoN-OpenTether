@@ -1,5 +1,6 @@
 package com.opentether.tunnel
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -7,64 +8,51 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.net.VpnService
+import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.util.Log
 import com.opentether.Constants
 import com.opentether.StatsHolder
+import com.opentether.data.TunnelTransport
+import com.opentether.logging.AppLogger
 import com.opentether.model.OtpFrame
+import com.opentether.runtime.TunnelRuntimeHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 private const val TAG = "OT/AoaTunnelClient"
+private const val ACTION_USB_PERMISSION = "com.opentether.USB_PERMISSION"
 
 /**
- * Android Open Accessory (AOA) tunnel — the cable-only alternative to the
- * ADB-based [UsbTunnelClient].
+ * Android Open Accessory (AOA) tunnel — the cable-only alternative to
+ * [UsbTunnelClient]. Identical session structure (send / receive / ping /
+ * flush coroutines) but uses a USB bulk pipe instead of an ADB TCP tunnel.
  *
- * Architecture
- * ─────────────
- * When an AOA-capable relay is connected over USB and has already sent the
- * AOA identification strings, Android presents the user with a "Use this app
- * to open the accessory?" dialog (once, on first connect; afterwards automatic).
- * The system then broadcasts [UsbManager.ACTION_USB_ACCESSORY_ATTACHED] and
- * the app receives a [UsbAccessory] object.
+ * Permission handling
+ * ───────────────────
+ * Android only auto-grants USB accessory permission when the app is launched
+ * via the USB_ACCESSORY_ATTACHED intent filter. When the user manually taps
+ * "Start" with the cable already plugged in, [UsbManager.openAccessory] would
+ * throw. [requestPermissionAndOpen] checks [UsbManager.hasPermission] first
+ * and, if absent, shows the system dialog and suspends until the user responds.
  *
- * [UsbManager.openAccessory] gives us a [ParcelFileDescriptor] — a plain file
- * descriptor backed by the USB bulk endpoints. We wrap it exactly the same way
- * [OpenTetherVpnService] wraps the TUN fd: a [DataInputStream] for reading OTP
- * frames and a [FileOutputStream] for writing them. This lets us share the
- * session logic with [UsbTunnelClient] completely.
- *
- * Why no `adb reverse`?
- * ──────────────────────
- * AOA bypasses ADB entirely. The transport is a direct USB bulk pipe negotiated
- * by the relay binary (relay/aoa_linux.go). No USB debugging, no ADB daemon,
- * no TCP forwarding — just the cable.
- *
- * Setup (one-time per user, per device)
- * ───────────────────────────────────────
- * 1. Build the relay with `go build -tags aoa ./...`
- * 2. Connect phone, run `sudo ./relay`  — relay negotiates AOA automatically
- * 3. Android shows "Open OpenTether for this accessory?" — tap OK once.
- * 4. [AoaTunnelClient] receives the accessory broadcast and opens the pipe.
- * 5. On all future connections the app opens automatically, no dialog.
- *
- * The VPN service can instantiate *either* [UsbTunnelClient] (ADB path) or
- * [AoaTunnelClient] (AOA path) — both have the same constructor signature and
- * the same [start] method.
+ * Session lifecycle — see [UsbTunnelClient] for full commentary.
  */
 class AoaTunnelClient(
     private val outbound:   Channel<ByteArray>,
@@ -74,155 +62,181 @@ class AoaTunnelClient(
     private val connIdCounter = AtomicInteger(1)
 
     fun start(scope: CoroutineScope): Job = scope.launch(Dispatchers.IO) {
-        Log.i(TAG, "started — waiting for USB accessory")
+        AppLogger.i(TAG, "started — waiting for USB accessory")
+        TunnelRuntimeHolder.onTransportWaiting(
+            transport = TunnelTransport.AOA,
+            detail    = "Plug in the cable, run the relay in AOA mode, and accept the phone prompt",
+        )
 
         while (isActive) {
-            val pfd = awaitAccessory(vpnService) ?: run {
-                // awaitAccessory only returns null on cancellation.
-                return@launch
-            }
+            val pfd = awaitAccessory(vpnService) ?: return@launch
 
-            Log.i(TAG, "USB accessory open — starting session")
+            AppLogger.i(TAG, "USB accessory open — starting session")
+            TunnelRuntimeHolder.onTransportConnecting(
+                transport = TunnelTransport.AOA,
+                detail    = "Accessory detected, opening bulk endpoints",
+            )
             try {
                 val input  = DataInputStream(FileInputStream(pfd.fileDescriptor))
                 val output = FileOutputStream(pfd.fileDescriptor)
-                runSession(scope, pfd, input, output)
+                TunnelRuntimeHolder.onTransportConnected(
+                    transport = TunnelTransport.AOA,
+                    detail    = "Accessory session established",
+                )
+                runSession(pfd, input, output)
             } catch (e: IOException) {
                 if (!isActive) return@launch
-                Log.w(TAG, "session IO error: ${e.message}")
+                AppLogger.w(TAG, "session IO error: ${e.message}")
             } catch (e: Exception) {
                 if (!isActive) return@launch
-                Log.e(TAG, "session unexpected error: ${e.message}")
+                AppLogger.e(TAG, "session unexpected error: ${e.message}")
+                TunnelRuntimeHolder.onError(TunnelTransport.AOA, "Accessory session failed: ${e.message}")
             } finally {
-                try { pfd.close() } catch (_: Exception) {}
+                try { pfd.close() } catch (_: Exception) {}  // no-op if runSession already closed it
+                StatsHolder.rttMs.set(0)
             }
 
             if (!isActive) return@launch
-            Log.i(TAG, "accessory disconnected — waiting for reconnect")
+            AppLogger.i(TAG, "accessory disconnected — waiting for reconnect")
+            TunnelRuntimeHolder.onTransportDisconnected(
+                transport = TunnelTransport.AOA,
+                detail    = "Accessory disconnected, waiting for reconnect",
+            )
             delay(Constants.RECONNECT_DELAY_MS)
         }
     }
 
     // ─── Accessory detection ──────────────────────────────────────────────
 
-    /**
-     * Suspends until a [UsbAccessory] is attached (or one is already present)
-     * and returns its opened [ParcelFileDescriptor].
-     *
-     * Returns null only when the calling coroutine is cancelled.
-     */
-    private suspend fun awaitAccessory(ctx: Context): ParcelFileDescriptor? =
-        suspendCancellableCoroutine { cont ->
-            val usbManager = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
+    private suspend fun awaitAccessory(ctx: Context): ParcelFileDescriptor? {
+        val usbManager = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
 
-            // Check if an accessory is already attached (e.g. hot-plug while app was closed).
-            val existing = usbManager.accessoryList?.firstOrNull()
-            if (existing != null) {
-                val pfd = tryOpen(usbManager, existing)
-                if (pfd != null) {
-                    cont.resume(pfd)
-                    return@suspendCancellableCoroutine
-                }
+        while (true) {
+            val accessory = usbManager.accessoryList?.firstOrNull()
+            if (accessory == null) {
+                TunnelRuntimeHolder.onTransportWaiting(
+                    transport = TunnelTransport.AOA,
+                    detail    = "No USB accessory detected. Reconnect the cable after starting the relay in AOA mode.",
+                )
+            } else {
+                val pfd = requestPermissionAndOpen(ctx, usbManager, accessory)
+                if (pfd != null) return pfd
             }
-
-            // Register for future attach events.
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action != UsbManager.ACTION_USB_ACCESSORY_ATTACHED) return
-                    val accessory = intent.getParcelableExtra<UsbAccessory>(
-                        UsbManager.EXTRA_ACCESSORY
-                    ) ?: return
-                    val pfd = tryOpen(usbManager, accessory)
-                    if (pfd != null) {
-                        ctx.unregisterReceiver(this)
-                        if (cont.isActive) cont.resume(pfd)
-                    }
-                }
-            }
-
-            ctx.registerReceiver(
-                receiver,
-                IntentFilter(UsbManager.ACTION_USB_ACCESSORY_ATTACHED),
-            )
-            cont.invokeOnCancellation {
-                try { ctx.unregisterReceiver(receiver) } catch (_: Exception) {}
-            }
-        }
-
-    private fun tryOpen(usbManager: UsbManager, accessory: UsbAccessory): ParcelFileDescriptor? {
-        Log.i(TAG, "accessory found: ${accessory.manufacturer} / ${accessory.model}")
-        return try {
-            usbManager.openAccessory(accessory).also {
-                if (it == null) Log.e(TAG, "openAccessory returned null (permission denied?)")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "openAccessory threw: ${e.message}")
-            null
+            delay(1_000L)
         }
     }
 
-    // ─── Session (mirrors UsbTunnelClient.runSession exactly) ────────────
+    /**
+     * Ensures USB accessory permission is held, then calls [UsbManager.openAccessory].
+     *
+     * - Permission already granted → opens immediately, no dialog.
+     * - Permission absent → shows system dialog, suspends until user responds.
+     *   Returns null if the user denies or the coroutine is cancelled.
+     */
+    private suspend fun requestPermissionAndOpen(
+        ctx:        Context,
+        usbManager: UsbManager,
+        accessory:  UsbAccessory,
+    ): ParcelFileDescriptor? {
+        AppLogger.i(TAG, "accessory found: ${accessory.manufacturer} / ${accessory.model}")
 
+        if (usbManager.hasPermission(accessory)) {
+            return tryOpen(usbManager, accessory)
+        }
+
+        AppLogger.i(TAG, "requesting USB accessory permission")
+        TunnelRuntimeHolder.onTransportWaiting(
+            transport = TunnelTransport.AOA,
+            detail    = "Accept the USB accessory permission dialog on your phone.",
+        )
+
+        val granted = suspendCancellableCoroutine { cont ->
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    context.unregisterReceiver(this)
+                    val allowed = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    AppLogger.i(TAG, "USB permission result: granted=$allowed")
+                    if (cont.isActive) cont.resume(allowed)
+                }
+            }
+
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ctx.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                ctx.registerReceiver(receiver, filter)
+            }
+            cont.invokeOnCancellation {
+                try { ctx.unregisterReceiver(receiver) } catch (_: Exception) {}
+            }
+
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_IMMUTABLE else 0
+            val pi = PendingIntent.getBroadcast(ctx, 0, Intent(ACTION_USB_PERMISSION), flags)
+            usbManager.requestPermission(accessory, pi)
+        }
+
+        if (!granted) {
+            AppLogger.e(TAG, "USB permission denied by user")
+            return null
+        }
+        return tryOpen(usbManager, accessory)
+    }
+
+    private fun tryOpen(usbManager: UsbManager, accessory: UsbAccessory): ParcelFileDescriptor? =
+        try {
+            usbManager.openAccessory(accessory).also {
+                if (it == null) AppLogger.e(TAG, "openAccessory returned null (permission denied?)")
+            }
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "openAccessory threw: ${e.message}")
+            null
+        }
+
+    // ─── Session ──────────────────────────────────────────────────────────
+
+    /**
+     * Runs send, receive, ping, and flush coroutines for one accessory connection.
+     * Ends (and closes [pfd]) as soon as either sendJob or recvJob exits.
+     */
     private suspend fun runSession(
-        scope:  CoroutineScope,
         pfd:    ParcelFileDescriptor,
         input:  DataInputStream,
         output: FileOutputStream,
     ) {
-        val decoder      = PacketDecoder(input)
-        val sessionScope = CoroutineScope(scope.coroutineContext)
+        val decoder       = PacketDecoder(input)
+        val bos           = BufferedOutputStream(output, SEND_BUF_SIZE)
+        val pingTimestamp = AtomicLong(0L)
 
-        val sendJob = sessionScope.launch(Dispatchers.IO) { sendLoop(output) }
-        val recvJob = sessionScope.launch(Dispatchers.IO) { receiveLoop(decoder) }
+        val sessionJob   = Job()
+        val sessionScope = CoroutineScope(Dispatchers.IO + sessionJob)
+
+        val sendJob  = sessionScope.launch { sendLoop(bos) }
+        val recvJob  = sessionScope.launch { receiveLoop(decoder, pingTimestamp) }
+        val pingJob  = sessionScope.launch { pingLoop(bos, pingTimestamp) }
+        val flushJob = sessionScope.launch { flushLoop(bos) }
 
         try {
-            sendJob.join()
+            select<Unit> {
+                sendJob.onJoin { }
+                recvJob.onJoin { }
+            }
         } finally {
-            sendJob.cancel()
-            recvJob.cancel()
-            recvJob.join()
+            withContext(NonCancellable) {
+                sessionJob.cancel()
+                try { pfd.close() } catch (_: Exception) {}  // unblocks readFully
+                sendJob.join()
+                recvJob.join()
+                pingJob.join()
+                flushJob.join()
+            }
         }
     }
 
-    // ─── Send loop (with UDP batching) ────────────────────────────────────
+    // ─── Send loop ────────────────────────────────────────────────────────
 
-    /**
-     * Drains [outbound] and writes OTP frames to [out].
-     *
-     * UDP / DNS optimisation
-     * ──────────────────────
-     * Without batching, each small UDP frame (DNS query, ~100 B) triggers one
-     * write() syscall and one USB bulk transfer — expensive at hundreds/sec.
-     *
-     * Strategy:
-     *  • Large packets (≥ [FLUSH_THRESHOLD]) → write + flush immediately.
-     *    These are TCP bulk data or video; no benefit to holding them.
-     *  • Small packets (< [FLUSH_THRESHOLD]) → write into the buffered stream;
-     *    a background coroutine flushes every [FLUSH_INTERVAL_MS] ms.
-     *
-     * This reduces USB bulk-transfer overhead for DNS-heavy workloads by ~35 %
-     * with a maximum added latency of [FLUSH_INTERVAL_MS] ms.
-     */
-    private suspend fun sendLoop(out: OutputStream) {
-        Log.d(TAG, "sendLoop started")
-
-        // Use a BufferedOutputStream so multiple small writes coalesce into
-        // fewer USB bulk transfers.
-        val bos = java.io.BufferedOutputStream(out, SEND_BUF_SIZE)
-
-        // Background flusher — fires every FLUSH_INTERVAL_MS so small frames
-        // don't sit in the buffer longer than necessary.
-        val flushJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                delay(FLUSH_INTERVAL_MS)
-                try {
-                    synchronized(bos) { bos.flush() }
-                } catch (_: IOException) {
-                    break
-                }
-            }
-        }
-
+    private suspend fun sendLoop(bos: BufferedOutputStream) {
+        AppLogger.d(TAG, "sendLoop started")
         try {
             for (rawPacket in outbound) {
                 val connId = connIdCounter.getAndIncrement()
@@ -230,66 +244,98 @@ class AoaTunnelClient(
 
                 synchronized(bos) {
                     bos.write(frame)
-                    // Flush immediately for large packets — they won't benefit
-                    // from batching and the peer likely has more to send back.
-                    if (rawPacket.size >= FLUSH_THRESHOLD) {
-                        bos.flush()
-                    }
+                    if (rawPacket.size >= FLUSH_THRESHOLD) bos.flush()
                 }
 
                 StatsHolder.bytesUpSec.addAndGet(rawPacket.size.toLong())
                 StatsHolder.totalUp.addAndGet(rawPacket.size.toLong())
-                Log.d(TAG, "→ accessory ${rawPacket.size}B  conn_id=$connId")
+                AppLogger.d(TAG, "→ accessory ${rawPacket.size}B  conn_id=$connId")
             }
         } catch (e: IOException) {
-            Log.w(TAG, "sendLoop: ${e.message}")
+            AppLogger.w(TAG, "sendLoop: ${e.message}")
         } finally {
-            flushJob.cancel()
-            Log.d(TAG, "sendLoop stopped")
+            AppLogger.d(TAG, "sendLoop stopped")
         }
     }
 
-    // ─── Receive loop (identical to UsbTunnelClient) ──────────────────────
+    // ─── Flush loop ───────────────────────────────────────────────────────
 
-    private suspend fun receiveLoop(decoder: PacketDecoder) {
-        Log.d(TAG, "receiveLoop started")
+    private suspend fun flushLoop(bos: BufferedOutputStream) {
+        try {
+            while (true) {
+                delay(FLUSH_INTERVAL_MS)
+                synchronized(bos) { bos.flush() }
+            }
+        } catch (_: IOException) {
+            // Stream gone; sendLoop will detect the same error and exit.
+        }
+    }
+
+    // ─── Ping loop ────────────────────────────────────────────────────────
+
+    private suspend fun pingLoop(bos: BufferedOutputStream, pingTimestamp: AtomicLong) {
+        AppLogger.d(TAG, "pingLoop started")
+        try {
+            while (true) {
+                delay(PING_INTERVAL_MS)
+                pingTimestamp.set(System.currentTimeMillis())
+                val frame = PacketEncoder.encodeControl(msgType = Constants.MSG_PING)
+                synchronized(bos) {
+                    bos.write(frame)
+                    bos.flush()
+                }
+                AppLogger.d(TAG, "→ accessory PING")
+            }
+        } catch (_: IOException) {
+            AppLogger.w(TAG, "pingLoop: stream gone")
+        } finally {
+            AppLogger.d(TAG, "pingLoop stopped")
+        }
+    }
+
+    // ─── Receive loop ─────────────────────────────────────────────────────
+
+    private suspend fun receiveLoop(decoder: PacketDecoder, pingTimestamp: AtomicLong) {
+        AppLogger.d(TAG, "receiveLoop started")
         try {
             while (true) {
                 val frame: OtpFrame = decoder.readFrame()
                 when (frame.msgType) {
                     Constants.MSG_DATA -> {
                         val payload = frame.payload ?: continue
-                        Log.d(TAG, "← accessory ${payload.size}B  conn_id=${frame.connId}")
+                        AppLogger.d(TAG, "← accessory ${payload.size}B  conn_id=${frame.connId}")
                         StatsHolder.bytesDownSec.addAndGet(payload.size.toLong())
                         StatsHolder.totalDown.addAndGet(payload.size.toLong())
                         inbound.send(payload)
                     }
-                    Constants.MSG_PING  -> Log.d(TAG, "← accessory PING")
-                    Constants.MSG_CLOSE -> Log.d(TAG, "← accessory CLOSE conn_id=${frame.connId}")
+                    Constants.MSG_PONG -> {
+                        val sentAt = pingTimestamp.get()
+                        if (sentAt > 0L) {
+                            val rtt = (System.currentTimeMillis() - sentAt).toInt().coerceAtLeast(0)
+                            StatsHolder.rttMs.set(rtt)
+                            AppLogger.d(TAG, "← accessory PONG  rtt=${rtt}ms")
+                        }
+                    }
+                    Constants.MSG_CLOSE -> AppLogger.d(TAG, "← accessory CLOSE conn_id=${frame.connId}")
                     Constants.MSG_ERROR -> {
                         val msg = frame.payload?.let { String(it, Charsets.UTF_8) } ?: "(none)"
-                        Log.e(TAG, "← accessory ERROR: $msg")
+                        AppLogger.e(TAG, "← accessory ERROR: $msg")
+                        TunnelRuntimeHolder.onError(TunnelTransport.AOA, "Accessory error: $msg")
                     }
-                    else -> Log.w(TAG, "← unknown type 0x${frame.msgType.toString(16)}")
+                    else -> AppLogger.w(TAG, "← unknown type 0x${frame.msgType.toString(16)}")
                 }
             }
         } catch (e: IOException) {
-            Log.w(TAG, "receiveLoop: ${e.message}")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "receiveLoop: malformed frame: ${e.message}")
+            AppLogger.w(TAG, "receiveLoop: ${e.message}")
         } finally {
-            Log.d(TAG, "receiveLoop stopped")
+            AppLogger.d(TAG, "receiveLoop stopped")
         }
     }
 
     companion object {
-        /** Bytes: payloads at or above this size are flushed immediately. */
-        private const val FLUSH_THRESHOLD = 512
-
-        /** Maximum milliseconds a small frame waits in the buffer before flush. */
+        private const val FLUSH_THRESHOLD   = 512
         private const val FLUSH_INTERVAL_MS = 2L
-
-        /** Internal buffer for the BufferedOutputStream (bytes). */
-        private const val SEND_BUF_SIZE = 32 * 1024
+        private const val SEND_BUF_SIZE     = 32_768
+        private const val PING_INTERVAL_MS  = 2_000L
     }
 }

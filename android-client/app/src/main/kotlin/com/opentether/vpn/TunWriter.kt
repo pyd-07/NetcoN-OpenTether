@@ -1,6 +1,7 @@
 package com.opentether.vpn
 
-import android.util.Log
+import com.opentether.StatsHolder
+import com.opentether.logging.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -26,7 +27,7 @@ class TunWriter(
     private val inbound: Channel<ByteArray>,
 ) {
     fun start(scope: CoroutineScope) = scope.launch(Dispatchers.IO) {
-        Log.i(TAG, "started")
+        AppLogger.i(TAG, "started")
 
         val stream = FileOutputStream(fd)
 
@@ -36,17 +37,18 @@ class TunWriter(
                 if (!isActive) break
 
                 try {
+                    StatsHolder.recordInboundPacket(packet)
                     stream.write(packet)
-                    Log.d(TAG, "← TUN inject ${packet.size}B")
+                    AppLogger.d(TAG, "← TUN inject ${packet.size}B")
                 } catch (e: IOException) {
                     if (!isActive) break
-                    Log.e(TAG, "write failed: ${e.message}")
+                    AppLogger.e(TAG, "write failed: ${e.message}")
                     // One bad packet doesn't kill the writer — keep going.
                 }
             }
         } finally {
             // Do NOT close stream — the fd is owned by VpnService.
-            Log.i(TAG, "stopped")
+            AppLogger.i(TAG, "stopped")
         }
     }
 }

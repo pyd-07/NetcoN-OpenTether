@@ -2,6 +2,8 @@ package com.opentether.vpn
 
 import android.util.Log
 import com.opentether.Constants
+import com.opentether.StatsHolder
+import com.opentether.logging.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -29,7 +31,7 @@ class TunReader(
     private val outbound: Channel<ByteArray>,
 ) {
     fun start(scope: CoroutineScope) = scope.launch(Dispatchers.IO) {
-        Log.i(TAG, "started")
+        AppLogger.i(TAG, "started")
 
         // Reused across reads — copyOf(n) is called before send() so
         // the buffer is safe to overwrite on the next iteration.
@@ -42,7 +44,7 @@ class TunReader(
                     stream.read(buffer)
                 } catch (e: IOException) {
                     if (!isActive) break  // normal shutdown, not an error
-                    Log.e(TAG, "read failed: ${e.message}")
+                    AppLogger.e(TAG, "read failed: ${e.message}")
                     break
                 }
 
@@ -58,14 +60,15 @@ class TunReader(
                     val proto   = if (version == 4 && packet.size > 9)
                                       packet[9].toInt() and 0xFF else -1
                     val name    = when (proto) { 6->"TCP" 17->"UDP" 1->"ICMP" else->"proto=$proto" }
-                    Log.d(TAG, "→ TUN ${packet.size}B  IPv$version  $name")
+                    AppLogger.d(TAG, "→ TUN ${packet.size}B  IPv$version  $name")
                 }
 
+                StatsHolder.recordOutboundPacket(packet)
                 outbound.send(packet)
             }
         } finally {
             // Do NOT close stream — the fd is owned by VpnService.
-            Log.i(TAG, "stopped")
+            AppLogger.i(TAG, "stopped")
         }
     }
 }
