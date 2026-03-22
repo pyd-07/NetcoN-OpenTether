@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -60,7 +62,7 @@ fun DashboardScreen(
                         if (uptimeMs != null && uptimeMs > 0) {
                             Text(
                                 text = "Up ${formatDuration(uptimeMs)}  ·  ${uiState.runtime.transport.label}",
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -75,7 +77,7 @@ fun DashboardScreen(
                         onClick = onStopRequested,
                         enabled = uiState.runtime.isRunning,
                     ) { Text("Stop") }
-                    OutlinedButton(onClick = onOpenLogs) { Text("Logs") }
+                    TextButton(onClick = onOpenLogs) { Text("Logs") }
                 }
             }
         }
@@ -155,7 +157,13 @@ fun DashboardScreen(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        uiState.stats.connections.take(8).forEach { connection ->
+                        uiState.stats.connections.take(8).forEachIndexed { index, connection ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                    thickness = 1.dp,
+                                )
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,

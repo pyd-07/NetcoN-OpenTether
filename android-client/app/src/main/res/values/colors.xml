@@ -20,13 +20,14 @@
 
     <!-- Status / chart -->
     <color name="connectedGreen">#2EA043</color>
+    <color name="connectedGreenBright">#3FB950</color>
     <color name="chartUpload">#58A6FF</color>
     <color name="warningYellow">#D29922</color>
     <color name="errorRed">#F85149</color>
 
     <!-- Text -->
     <color name="textPrimary">#E6EDF3</color>
-    <color name="textSecondary">#8B949E</color>
+    <color name="textSecondary">#9DAAB5</color>
     <color name="textTertiary">#6E7681</color>
     <color name="textMuted">#6E7681</color>
     <color name="buttonText">#E6EDF3</color>

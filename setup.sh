@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════════════════════════════════════
-#  OpenTether — one-command setup script
-#  v0.9.1 | Tested on Debian / Ubuntu (amd64 + arm64)
+#   OpenTether (NetcoN) Setup Script - v0.9.3
+#  | Tested on Debian / Ubuntu (amd64 + arm64)
 #
 #  Usage:
 #    sudo ./setup.sh              # ADB transport  (default, USB debugging required)
@@ -24,7 +24,7 @@ section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
-  echo -e "${BOLD}OpenTether setup v0.9.1${NC}"
+  echo -e "${BOLD}OpenTether setup v0.9.3${NC}"
   echo ""
   echo "  sudo ./setup.sh              ADB transport (USB debugging required)"
   echo "  sudo ./setup.sh --aoa        AOA transport (no USB debugging needed)"
@@ -53,7 +53,7 @@ done
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
 echo "  ╔═══════════════════════════════╗"
-echo "  ║   OpenTether  v0.9.1  setup   ║"
+echo "  ║   OpenTether  v0.9.3  setup   ║"
 echo "  ╚═══════════════════════════════╝"
 echo -e "${NC}"
 echo "  Transport : $(if $USE_AOA; then echo 'AOA (direct USB, no USB debugging)'; else echo 'ADB (TCP over USB, USB debugging required)'; fi)"
@@ -170,7 +170,8 @@ else
 fi
 
 APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
-APK_NAME="opentether-v0.9.1.apk"
+APK_NAME="opentether-v0.9.3.apk"
+APK_URL="https://github.com/piyushyadav-pyd/NetcoN-OpenTether/releases/download/v0.9.3/$APK_NAME"
 cp "$APK_SRC" "../$APK_NAME"
 info "APK built → ./$APK_NAME"
 cd ..

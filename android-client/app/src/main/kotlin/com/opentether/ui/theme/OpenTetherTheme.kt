@@ -21,10 +21,11 @@ val OtOutline     = Color(0xFF30363D)
 val OtBlue        = Color(0xFF58A6FF)
 val OtBlueStrong  = Color(0xFF1F6FEB)
 val OtGreen       = Color(0xFF2EA043)
+val OtGreenBright = Color(0xFF3FB950)
 val OtRed         = Color(0xFFF85149)
 val OtYellow      = Color(0xFFD29922)
 val OtText        = Color(0xFFE6EDF3)
-val OtTextMuted   = Color(0xFF8B949E)
+val OtTextMuted   = Color(0xFF9DAAB5)
 
 // ── Color scheme ──────────────────────────────────────────────────────────────
 

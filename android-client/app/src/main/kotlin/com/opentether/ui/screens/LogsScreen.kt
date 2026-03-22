@@ -2,11 +2,13 @@ package com.opentether.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -121,13 +123,30 @@ fun LogsScreen(
                         .fillMaxWidth()
                         .background(OtSurfaceAlt, MaterialTheme.shapes.small)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    TerminalText(
-                        text = "${formatter.format(Date(entry.timestampMs))}  ${entry.title}",
-                        color = color,
-                        bold = true,
-                    )
+                    // Header row: timestamp + level dot + title
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = formatter.format(Date(entry.timestampMs)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(color, androidx.compose.foundation.shape.CircleShape),
+                        )
+                        Text(
+                            text = entry.title,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            color = color,
+                        )
+                    }
                     Text(
                         text = entry.message,
                         style = MaterialTheme.typography.bodyMedium,
@@ -137,6 +156,7 @@ fun LogsScreen(
                         TerminalText(
                             text = entry.technical,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
                         )
                     }
                 }

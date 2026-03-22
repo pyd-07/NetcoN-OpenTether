@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import java.io.BufferedOutputStream
+import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -77,7 +77,16 @@ class AoaTunnelClient(
                 detail    = "Accessory detected, opening bulk endpoints",
             )
             try {
-                val input  = DataInputStream(FileInputStream(pfd.fileDescriptor))
+                // Why BufferedInputStream here?
+                // Android's /dev/usb_accessory driver returns exactly one USB bulk
+                // transfer per read() syscall. DataInputStream.readFully(12) results
+                // in read(12), which dequeues a transfer, returns 12 bytes, and
+                // DISCARDS the remainder of that transfer.
+                //
+                // Wrapping in BufferedInputStream (with a buffer >= max transfer size)
+                // ensures the first read() dequeues the entire transfer into memory,
+                // allowing subsequent readFully() calls to consume it without loss.
+                val input  = DataInputStream(BufferedInputStream(FileInputStream(pfd.fileDescriptor), 65536))
                 val output = FileOutputStream(pfd.fileDescriptor)
                 TunnelRuntimeHolder.onTransportConnected(
                     transport = TunnelTransport.AOA,
@@ -196,8 +205,22 @@ class AoaTunnelClient(
     // ─── Session ──────────────────────────────────────────────────────────
 
     /**
-     * Runs send, receive, ping, and flush coroutines for one accessory connection.
+     * Runs send, receive, and ping coroutines for one accessory connection.
      * Ends (and closes [pfd]) as soon as either sendJob or recvJob exits.
+     *
+     * Why no BufferedOutputStream here?
+     * Android's /dev/usb_accessory kernel driver returns exactly one USB bulk
+     * transfer per read() syscall. If multiple OTP frames are batched together
+     * into a single USB transfer by a BufferedOutputStream flush, DataInputStream
+     * .readFully() on the relay side would read Frame1's 12-byte header from that
+     * transfer, then ask for Frame1's payload bytes — but /dev/usb_accessory
+     * gives it Frame2's header bytes instead, producing a garbage payload_length
+     * value like 96686829.
+     *
+     * Each frame (header + payload) is therefore built as one ByteArray and
+     * written with a single FileOutputStream.write() call, mapping to exactly
+     * one USB bulk OUT transfer. This mirrors the Go relay's DirectWriter /
+     * BuildFrame approach.
      */
     private suspend fun runSession(
         pfd:    ParcelFileDescriptor,
@@ -205,16 +228,15 @@ class AoaTunnelClient(
         output: FileOutputStream,
     ) {
         val decoder       = PacketDecoder(input)
-        val bos           = BufferedOutputStream(output, SEND_BUF_SIZE)
+        val writeMu       = Any()          // guards output across sendJob and pingJob
         val pingTimestamp = AtomicLong(0L)
 
         val sessionJob   = Job()
         val sessionScope = CoroutineScope(Dispatchers.IO + sessionJob)
 
-        val sendJob  = sessionScope.launch { sendLoop(bos) }
-        val recvJob  = sessionScope.launch { receiveLoop(decoder, pingTimestamp) }
-        val pingJob  = sessionScope.launch { pingLoop(bos, pingTimestamp) }
-        val flushJob = sessionScope.launch { flushLoop(bos) }
+        val sendJob = sessionScope.launch { sendLoop(output, writeMu) }
+        val recvJob = sessionScope.launch { receiveLoop(decoder, pingTimestamp) }
+        val pingJob = sessionScope.launch { pingLoop(output, writeMu, pingTimestamp) }
 
         try {
             select<Unit> {
@@ -228,24 +250,28 @@ class AoaTunnelClient(
                 sendJob.join()
                 recvJob.join()
                 pingJob.join()
-                flushJob.join()
             }
         }
     }
 
     // ─── Send loop ────────────────────────────────────────────────────────
 
-    private suspend fun sendLoop(bos: BufferedOutputStream) {
+    /**
+     * Reads raw IP packets from [outbound], encodes each into a complete OTP
+     * frame byte-array, and writes it in a single [output].write() call.
+     *
+     * One write() call = one USB bulk OUT transfer = one USB bulk IN transfer on
+     * the relay side. This is the only correct framing strategy for AOA.
+     */
+    private suspend fun sendLoop(output: FileOutputStream, writeMu: Any) {
         AppLogger.d(TAG, "sendLoop started")
         try {
             for (rawPacket in outbound) {
                 val connId = connIdCounter.getAndIncrement()
-                val frame  = PacketEncoder.encode(connId, rawPacket, Constants.MSG_DATA)
-
-                synchronized(bos) {
-                    bos.write(frame)
-                    if (rawPacket.size >= FLUSH_THRESHOLD) bos.flush()
-                }
+                // Build header + payload in one contiguous array, then write
+                // with a single write() → single USB bulk OUT transfer.
+                val frame = PacketEncoder.encode(connId, rawPacket, Constants.MSG_DATA)
+                synchronized(writeMu) { output.write(frame) }
 
                 StatsHolder.bytesUpSec.addAndGet(rawPacket.size.toLong())
                 StatsHolder.totalUp.addAndGet(rawPacket.size.toLong())
@@ -258,32 +284,16 @@ class AoaTunnelClient(
         }
     }
 
-    // ─── Flush loop ───────────────────────────────────────────────────────
-
-    private suspend fun flushLoop(bos: BufferedOutputStream) {
-        try {
-            while (true) {
-                delay(FLUSH_INTERVAL_MS)
-                synchronized(bos) { bos.flush() }
-            }
-        } catch (_: IOException) {
-            // Stream gone; sendLoop will detect the same error and exit.
-        }
-    }
-
     // ─── Ping loop ────────────────────────────────────────────────────────
 
-    private suspend fun pingLoop(bos: BufferedOutputStream, pingTimestamp: AtomicLong) {
+    private suspend fun pingLoop(output: FileOutputStream, writeMu: Any, pingTimestamp: AtomicLong) {
         AppLogger.d(TAG, "pingLoop started")
         try {
             while (true) {
                 delay(PING_INTERVAL_MS)
                 pingTimestamp.set(System.currentTimeMillis())
                 val frame = PacketEncoder.encodeControl(msgType = Constants.MSG_PING)
-                synchronized(bos) {
-                    bos.write(frame)
-                    bos.flush()
-                }
+                synchronized(writeMu) { output.write(frame) }
                 AppLogger.d(TAG, "→ accessory PING")
             }
         } catch (_: IOException) {
@@ -333,9 +343,6 @@ class AoaTunnelClient(
     }
 
     companion object {
-        private const val FLUSH_THRESHOLD   = 512
-        private const val FLUSH_INTERVAL_MS = 2L
-        private const val SEND_BUF_SIZE     = 32_768
-        private const val PING_INTERVAL_MS  = 2_000L
+        private const val PING_INTERVAL_MS = 2_000L
     }
 }

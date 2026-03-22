@@ -3,6 +3,7 @@ package com.opentether.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
@@ -73,6 +74,7 @@ fun TunnelsScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .defaultMinSize(minHeight = 64.dp)
                             .selectable(
                                 selected = uiState.settings.preferredTransport == transport,
                                 onClick = { onTransportSelected(transport) },
@@ -124,18 +126,26 @@ fun TunnelsScreen(
                     title = "USB Accessory setup",
                     subtitle = "Extra steps required for AOA mode",
                 ) {
-                    Text(
-                        text = "1. Start the relay on the workstation with AOA support enabled.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = "2. Reconnect the USB cable so Android can display the accessory permission prompt.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = "3. Accept the prompt, then tap Start from the Dashboard or the top bar.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    listOf(
+                        "Start the relay on the workstation with AOA support enabled.",
+                        "Reconnect the USB cable so Android can display the accessory permission prompt.",
+                        "Accept the prompt, then tap Start from the Dashboard or the top bar.",
+                    ).forEachIndexed { i, step ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = "${i + 1}.",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = step,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
         }

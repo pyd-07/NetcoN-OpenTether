@@ -9,8 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -82,15 +83,19 @@ fun OpenTetherApp(
                     )
                     if (uiState.runtime.isRunning) {
                         IconButton(onClick = { viewModel.stopVpnService() }) {
-                            Icon(Icons.Default.Stop, contentDescription = "Stop VPN")
+                            Icon(Icons.Outlined.StopCircle, contentDescription = "Stop VPN")
                         }
                     } else {
                         IconButton(onClick = onRequestStartVpnPermission) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Start VPN")
+                            Icon(Icons.Outlined.PlayCircle, contentDescription = "Start VPN")
                         }
                     }
                 }
             }
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                thickness = 1.dp,
+            )
         },
         bottomBar = {
             if (!useRail) {
