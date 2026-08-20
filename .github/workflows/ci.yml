@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -31,14 +31,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Check formatting
+      - name: Check formatting of changed Go files
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          files="$(gofmt -l .)"
-          if [[ -n "$files" ]]; then
-            echo "The following Go files are not gofmt-formatted:"
-            printf '%s\n' "$files"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            mapfile -t files < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA" -- '*.go')
+          else
+            mapfile -t files < <(find . -type f -name '*.go' -not -path './.git/*' -print)
+          fi
+          if (( ${#files[@]} == 0 )); then
+            echo 'No Go files changed; formatting check passed.'
+            exit 0
+          fi
+          formatted="$(gofmt -l "${files[@]}")"
+          if [[ -n "$formatted" ]]; then
+            echo "The following changed Go files are not gofmt-formatted:"
+            printf '%s\n' "$formatted"
             exit 1
           fi
 
@@ -106,20 +118,27 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Install ShellCheck
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends shellcheck
 
-      - name: Check shell scripts
+      - name: Check changed shell scripts
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          mapfile -d '' scripts < <(find . -type f -name '*.sh' -not -path './.git/*' -print0)
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            mapfile -t scripts < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA" -- '*.sh')
+          else
+            mapfile -t scripts < <(find . -type f -name '*.sh' -not -path './.git/*' -print)
+          fi
           if (( ${#scripts[@]} == 0 )); then
-            echo 'No shell scripts found.'
+            echo 'No shell scripts changed; ShellCheck passed.'
             exit 0
           fi
           shellcheck "${scripts[@]}"
