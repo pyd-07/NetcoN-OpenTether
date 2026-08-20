@@ -39,9 +39,9 @@ func (s ConnectionState) String() string {
 // ConnectionStateTracker serializes transport state transitions and keeps the
 // latest failure reason available for diagnostics.
 type ConnectionStateTracker struct {
-	mu       sync.RWMutex
-	state    ConnectionState
-	lastErr  error
+	mu      sync.RWMutex
+	state   ConnectionState
+	lastErr error
 }
 
 func NewConnectionStateTracker() *ConnectionStateTracker {
