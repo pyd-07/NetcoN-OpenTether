@@ -145,9 +145,9 @@ func (w *AdbWatcher) setupReverse(ctx context.Context, serial string, tracker *C
 		}
 	}
 
-	err := fmt.Errorf("adb reverse failed after %d attempts", adbMaxAttempts)
-	tracker.Fail(err)
-	errorf("adb watcher: [%s]: %v", serial, err)
+	lastErr := fmt.Errorf("adb reverse failed after %d attempts", adbMaxAttempts)
+	tracker.Fail(lastErr)
+	errorf("adb watcher: [%s]: %v", serial, lastErr)
 
 	w.mu.Lock()
 	delete(w.known, serial)
