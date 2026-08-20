@@ -37,7 +37,7 @@ func NewAdbWatcher(port int) *AdbWatcher {
 }
 
 func (w *AdbWatcher) Watch(ctx context.Context) {
-	w.poll()
+	w.poll(ctx)
 
 	ticker := time.NewTicker(adbPollInterval)
 	defer ticker.Stop()
@@ -52,12 +52,16 @@ func (w *AdbWatcher) Watch(ctx context.Context) {
 			w.mu.Unlock()
 			return
 		case <-ticker.C:
-			w.poll()
+			w.poll(ctx)
 		}
 	}
 }
 
-func (w *AdbWatcher) poll() {
+func (w *AdbWatcher) poll(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	out, err := exec.Command("adb", "devices").CombinedOutput()
 	if err != nil {
 		debugf("adb watcher: devices poll failed: %v — %s", err, strings.TrimSpace(string(out)))
@@ -94,7 +98,7 @@ func (w *AdbWatcher) poll() {
 
 		if !alreadyKnown {
 			logf("adb watcher: device detected [%s]", serial)
-			go w.setupReverse(serial, tracker)
+			go w.setupReverse(ctx, serial, tracker)
 		}
 	}
 
@@ -111,7 +115,7 @@ func (w *AdbWatcher) poll() {
 	w.mu.Unlock()
 }
 
-func (w *AdbWatcher) setupReverse(serial string, tracker *ConnectionStateTracker) {
+func (w *AdbWatcher) setupReverse(ctx context.Context, serial string, tracker *ConnectionStateTracker) {
 	tracker.Set(StateConnecting)
 	portStr := fmt.Sprintf("tcp:%d", w.port)
 	args := []string{"-s", serial, "reverse", portStr, portStr}
@@ -131,9 +135,13 @@ func (w *AdbWatcher) setupReverse(serial string, tracker *ConnectionStateTracker
 		debugf("adb watcher: reverse attempt %d/%d for [%s] failed: %v — %s; retrying in %s",
 			attempt, adbMaxAttempts, serial, err, strings.TrimSpace(string(out)), backoff)
 
+		timer := time.NewTimer(backoff)
 		select {
-		case <-time.After(backoff):
-		case <-time.After(0):
+		case <-ctx.Done():
+			timer.Stop()
+			tracker.Set(StateStopping)
+			return
+		case <-timer.C:
 		}
 	}
 
