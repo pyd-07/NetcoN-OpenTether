@@ -1,0 +1,137 @@
+name: Pull Request CI
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          files="$(gofmt -l .)"
+          if [[ -n "$files" ]]; then
+            echo "The following Go files are not gofmt-formatted:"
+            printf '%s\n' "$files"
+            exit 1
+          fi
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Run tests with race detector
+        run: go test -race ./...
+
+      - name: Build standard relay
+        run: go build -trimpath -buildvcs=true ./...
+
+      - name: Build AOA relay
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev
+          go build -trimpath -buildvcs=true -tags aoa ./...
+
+  android:
+    name: Android checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        working-directory: android-client
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f gradle/wrapper/gradle-wrapper.jar
+          test -f gradle/wrapper/gradle-wrapper.properties
+          grep -q '^distributionSha256Sum=' gradle/wrapper/gradle-wrapper.properties
+          ./gradlew --version
+
+      - name: Run unit tests
+        working-directory: android-client
+        run: ./gradlew test --no-daemon --stacktrace
+
+      - name: Run Android lint
+        working-directory: android-client
+        run: ./gradlew lint --no-daemon --stacktrace
+
+      - name: Build debug APK
+        working-directory: android-client
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+  shell:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Check shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' scripts < <(find . -type f -name '*.sh' -not -path './.git/*' -print0)
+          if (( ${#scripts[@]} == 0 )); then
+            echo 'No shell scripts found.'
+            exit 0
+          fi
+          shellcheck "${scripts[@]}"
+
+  dependency-review:
+    name: Dependency security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dependency review
+        uses: actions/dependency-review-action@dcd589ca9f7a6ded22e224ca2e288beb6bf9846b # v5.0.0
+        with:
+          fail-on-severity: low
+          fail-on-scopes: runtime, development, unknown
+          license-check: true
