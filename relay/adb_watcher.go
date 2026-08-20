@@ -11,40 +11,45 @@ import (
 	"time"
 )
 
-// AdbWatcher polls `adb devices` every two seconds and automatically runs
-// `adb reverse tcp:PORT tcp:PORT` whenever a new device appears in "device"
-// state. This eliminates the manual setup step.
-//
-// On reconnect (cable unplug + replug), the serial either stays the same
-// or changes. Either way, we detect the "device" state reappearing and
-// re-run the tunnel setup — so reconnects are fully automatic.
-type AdbWatcher struct {
-	port int
+const (
+	adbPollInterval = 1 * time.Second
+	adbBackoffMin   = 500 * time.Millisecond
+	adbBackoffMax   = 8 * time.Second
+	adbMaxAttempts  = 5
+)
 
-	mu    sync.Mutex
-	known map[string]struct{} // serials for which reverse setup is active or succeeded
+// AdbWatcher polls adb for ready devices and maintains one reverse tunnel
+// setup per serial. Detection is explicit about device lifecycle so a USB
+// unplug/replug is treated as a new connection rather than a stale session.
+type AdbWatcher struct {
+	port   int
+	mu     sync.Mutex
+	known  map[string]struct{}
+	states map[string]*ConnectionStateTracker
 }
 
-// NewAdbWatcher returns a watcher that will forward port on any Android
-// device that appears while ctx is live.
 func NewAdbWatcher(port int) *AdbWatcher {
 	return &AdbWatcher{
-		port:  port,
-		known: make(map[string]struct{}),
+		port:   port,
+		known:  make(map[string]struct{}),
+		states: make(map[string]*ConnectionStateTracker),
 	}
 }
 
-// Watch polls forever until ctx is cancelled. Run it in a goroutine.
 func (w *AdbWatcher) Watch(ctx context.Context) {
-	// Poll immediately so we catch a device already connected before relay started.
 	w.poll()
 
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(adbPollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			w.mu.Lock()
+			for _, tracker := range w.states {
+				tracker.Set(StateStopping)
+			}
+			w.mu.Unlock()
 			return
 		case <-ticker.C:
 			w.poll()
@@ -52,52 +57,53 @@ func (w *AdbWatcher) Watch(ctx context.Context) {
 	}
 }
 
-// poll runs `adb devices` once and dispatches setupReverse for each new device.
 func (w *AdbWatcher) poll() {
-	out, err := exec.Command("adb", "devices").Output()
+	out, err := exec.Command("adb", "devices").CombinedOutput()
 	if err != nil {
-		// adb may not be installed, or the daemon isn't running yet — not fatal.
-		debugf("adb watcher: devices poll failed: %v", err)
+		debugf("adb watcher: devices poll failed: %v — %s", err, strings.TrimSpace(string(out)))
 		return
 	}
 
 	current := make(map[string]struct{})
 	scanner := bufio.NewScanner(bytes.NewReader(out))
-	scanner.Scan() // discard "List of devices attached" header
+	scanner.Scan()
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
+		fields := strings.Fields(scanner.Text())
 		if len(fields) < 2 {
 			continue
 		}
 		serial, state := fields[0], fields[1]
 		if state != "device" {
-			// "offline" / "unauthorized" / "recovery" — not ready
 			continue
 		}
 		current[serial] = struct{}{}
 
 		w.mu.Lock()
+		tracker := w.states[serial]
+		if tracker == nil {
+			tracker = NewConnectionStateTracker()
+			w.states[serial] = tracker
+		}
 		_, alreadyKnown := w.known[serial]
 		if !alreadyKnown {
-			// Reserve serial immediately before spawning the goroutine.
-			// Without this, a second poll() 2 seconds later would also see
-			// the serial not in known and spawn a duplicate goroutine.
 			w.known[serial] = struct{}{}
+			tracker.Set(StateDetecting)
 		}
 		w.mu.Unlock()
 
 		if !alreadyKnown {
-			logf("adb watcher: device connected [%s] — setting up reverse tunnel", serial)
-			go w.setupReverse(serial)
+			logf("adb watcher: device detected [%s]", serial)
+			go w.setupReverse(serial, tracker)
 		}
 	}
 
-	// Forget serials that have gone away so a future replug triggers re-setup.
 	w.mu.Lock()
 	for serial := range w.known {
 		if _, stillPresent := current[serial]; !stillPresent {
+			if tracker := w.states[serial]; tracker != nil {
+				tracker.Set(StateDisconnected)
+			}
 			logf("adb watcher: device disconnected [%s]", serial)
 			delete(w.known, serial)
 		}
@@ -105,28 +111,36 @@ func (w *AdbWatcher) poll() {
 	w.mu.Unlock()
 }
 
-// setupReverse runs `adb -s <serial> reverse tcp:PORT tcp:PORT` with up to
-// 4 attempts, backing off 500 ms × attempt between tries.
-//
-// On success: serial stays in known (added by poll before this goroutine ran).
-// On failure: serial is removed from known so the next poll can retry.
-func (w *AdbWatcher) setupReverse(serial string) {
+func (w *AdbWatcher) setupReverse(serial string, tracker *ConnectionStateTracker) {
+	tracker.Set(StateConnecting)
 	portStr := fmt.Sprintf("tcp:%d", w.port)
 	args := []string{"-s", serial, "reverse", portStr, portStr}
 
-	for attempt := 1; attempt <= 4; attempt++ {
+	for attempt := 1; attempt <= adbMaxAttempts; attempt++ {
 		out, err := exec.Command("adb", args...).CombinedOutput()
 		if err == nil {
+			tracker.Set(StateConnected)
 			logf("adb watcher: reverse tunnel ready for [%s] on port %d", serial, w.port)
-			return // serial already in known from poll(); nothing more to do
+			return
 		}
-		debugf("adb reverse attempt %d for [%s]: %v — %s",
-			attempt, serial, err, strings.TrimSpace(string(out)))
-		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+
+		backoff := adbBackoffMin << (attempt - 1)
+		if backoff > adbBackoffMax {
+			backoff = adbBackoffMax
+		}
+		debugf("adb watcher: reverse attempt %d/%d for [%s] failed: %v — %s; retrying in %s",
+			attempt, adbMaxAttempts, serial, err, strings.TrimSpace(string(out)), backoff)
+
+		select {
+		case <-time.After(backoff):
+		case <-time.After(0):
+		}
 	}
 
-	errorf("adb watcher: giving up on reverse tunnel for [%s] after 4 attempts", serial)
-	// Remove serial so the next poll() can retry when the device reconnects.
+	err := fmt.Errorf("adb reverse failed after %d attempts", adbMaxAttempts)
+	tracker.Fail(err)
+	errorf("adb watcher: [%s]: %v", serial, err)
+
 	w.mu.Lock()
 	delete(w.known, serial)
 	w.mu.Unlock()
