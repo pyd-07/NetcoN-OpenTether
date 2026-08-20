@@ -17,8 +17,6 @@ import (
 	"github.com/google/gousb"
 )
 
-// ─── AOA protocol constants ────────────────────────────────────────────────
-
 const (
 	aoaGetProtocol uint8 = 51
 	aoaSendString  uint8 = 52
@@ -35,19 +33,11 @@ const (
 	aoaPID    gousb.ID = 0x2D00
 	aoaADBPID gousb.ID = 0x2D01
 
-	// aoaReadBufSize is the size of each USB bulk IN transfer submitted by the
-	// read pump. This must not exceed Android's internal USB accessory transfer
-	// limit (typically 16 KB). Using a value equal to the OTP frame max size
-	// (12-byte header + 65535-byte payload) would be wasteful; 16 KB gives
-	// enough headroom for one or two batched frames without over-requesting.
-	//
-	// The original code called epIn.Read(p) directly from the bufio fill path,
-	// which submitted transfers of up to 6000 bytes (MTU*4). In practice, gousb
-	// + libusb handle short-packet termination correctly, but capping the read
-	// here to 16 KB makes behaviour independent of the caller's buffer size and
-	// avoids any libusb/kernel short-packet edge cases on unusual USB host
-	// controllers.
 	aoaReadBufSize = 16 * 1024
+	aoaBackoffMin  = 500 * time.Millisecond
+	aoaBackoffMax  = 8 * time.Second
+	aoaMaxAttempts = 6
+	aoaDetectWait  = 500 * time.Millisecond
 )
 
 var aoaStrings = [6]string{
@@ -60,78 +50,44 @@ var aoaStrings = [6]string{
 }
 
 var androidVIDs = []gousb.ID{
-	0x04E8, // Samsung
-	0x18D1, // Google / Pixel
-	0x2717, // Xiaomi
-	0x12D1, // Huawei
-	0x1BBB, // Motorola
-	0x0BB4, // HTC
-	0x054C, // Sony
-	0x2A70, // OnePlus
-	0x22D9, // OPPO / Realme
-	0x19D2, // ZTE
+	0x04E8,
+	0x18D1,
+	0x2717,
+	0x12D1,
+	0x1BBB,
+	0x0BB4,
+	0x054C,
+	0x2A70,
+	0x22D9,
+	0x19D2,
 }
 
-// ─── AoaConn ──────────────────────────────────────────────────────────────
-
-// AoaConn wraps two USB bulk endpoints and presents them as a net.Conn so
-// the existing session logic can use it without modification.
-//
-// Read path — read pump goroutine
-// ────────────────────────────────
-// The original code called epIn.Read(p) directly from within bufio's fill
-// path. bufio asked for up to 6000 bytes per call, which caused gousb to
-// submit a 6000-byte USB bulk IN transfer. While short-packet termination
-// should complete such a transfer the moment Android sends any data, this
-// relies on correct behaviour from libusb and the specific USB host
-// controller driver.
-//
-// Instead, a dedicated readPump goroutine reads from epIn in a tight loop,
-// each time requesting at most aoaReadBufSize bytes. The data is fed into an
-// io.Pipe, and AoaConn.Read reads from the pipe's consumer end. This decouples
-// the caller's buffer size from the USB transfer size and makes the read
-// behaviour fully deterministic.
-//
-// Write path
-// ──────────
-// epOut.Write is called directly from FlushWriter (which serialises writes
-// with a mutex). No change needed here; USB bulk OUT is inherently ordered
-// and gousb handles splitting writes into multiple USB packets as needed.
 type AoaConn struct {
 	dev        *gousb.Device
 	intf       *gousb.Interface
-	done       func() // releases the interface
+	done       func()
 	in         *gousb.InEndpoint
 	out        *gousb.OutEndpoint
-	pr         *io.PipeReader // AoaConn.Read reads from here
-	pw         *io.PipeWriter // readPump writes to here
+	pr         *io.PipeReader
+	pw         *io.PipeWriter
 	localAddr  net.Addr
 	remoteAddr net.Addr
 	closedOnce sync.Once
 	closed     chan struct{}
 }
 
-// readPump runs in its own goroutine for the lifetime of the connection.
-// It reads from the USB bulk IN endpoint in aoaReadBufSize chunks and
-// forwards data into the pipe. When the endpoint closes or the connection
-// is torn down, it closes the write end of the pipe so AoaConn.Read returns
-// io.EOF.
 func (c *AoaConn) readPump() {
 	buf := make([]byte, aoaReadBufSize)
 	for {
 		n, err := c.in.Read(buf)
 		if n > 0 {
-			// Write whatever arrived into the pipe before checking err.
-			// A short read with valid data is normal for USB streaming.
 			if _, werr := c.pw.Write(buf[:n]); werr != nil {
-				// Pipe was closed — session ended cleanly.
 				return
 			}
 		}
 		if err != nil {
 			select {
 			case <-c.closed:
-				// Close() was called; this is expected.
 				c.pw.CloseWithError(io.EOF)
 			default:
 				c.pw.CloseWithError(fmt.Errorf("USB IN read: %w", err))
@@ -141,15 +97,8 @@ func (c *AoaConn) readPump() {
 	}
 }
 
-// Read satisfies io.Reader. It reads from the pipe that readPump fills.
-// This call blocks until data is available, just like a TCP socket read.
-func (c *AoaConn) Read(p []byte) (int, error) {
-	return c.pr.Read(p)
-}
+func (c *AoaConn) Read(p []byte) (int, error) { return c.pr.Read(p) }
 
-// Write satisfies io.Writer. It writes directly to the USB bulk OUT endpoint.
-// Called exclusively by FlushWriter (which holds a mutex), so no additional
-// synchronisation is needed here.
 func (c *AoaConn) Write(p []byte) (int, error) {
 	select {
 	case <-c.closed:
@@ -163,13 +112,9 @@ func (c *AoaConn) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Close tears down the connection, stops readPump, releases the USB interface,
-// and closes the device. Safe to call multiple times.
 func (c *AoaConn) Close() error {
 	c.closedOnce.Do(func() {
 		close(c.closed)
-		// Closing pw causes readPump's next pipe write to fail, stopping it.
-		// Closing pr causes any in-progress AoaConn.Read to return immediately.
 		c.pw.CloseWithError(io.EOF)
 		c.pr.CloseWithError(io.EOF)
 		c.done()
@@ -189,65 +134,101 @@ type usbAddr struct{ s string }
 func (u usbAddr) Network() string { return "usb" }
 func (u usbAddr) String() string  { return u.s }
 
-// ─── AoaServer ────────────────────────────────────────────────────────────
-
 type AoaServer struct {
-	cfg Config
-	tun *TunDevice
+	cfg   Config
+	tun   *TunDevice
+	state *ConnectionStateTracker
 }
 
 func NewAoaServer(cfg Config, tun *TunDevice) *AoaServer {
-	return &AoaServer{cfg: cfg, tun: tun}
+	return &AoaServer{
+		cfg:   cfg,
+		tun:   tun,
+		state: NewConnectionStateTracker(),
+	}
 }
 
-// Run loops waiting for Android devices. Each connection is handled
-// in-line (one device at a time). Blocks until ctx is cancelled.
 func (s *AoaServer) Run(ctx context.Context) {
 	logf("AOA server ready — waiting for Android device over USB")
 	usbCtx := gousb.NewContext()
 	defer usbCtx.Close()
 
 	for ctx.Err() == nil {
-		conn, err := s.waitForDevice(ctx, usbCtx)
+		s.state.Set(StateDetecting)
+		conn, err := s.connectWithBackoff(ctx, usbCtx)
 		if err != nil {
 			if ctx.Err() != nil {
+				s.state.Set(StateStopping)
 				return
 			}
-			errorf("AOA: %v — retrying in 3 s", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(3 * time.Second):
-			}
+			s.state.Fail(err)
+			errorf("AOA connection failed: %v", err)
 			continue
 		}
 
+		s.state.Set(StateConnected)
 		logf("AOA: Android device connected — starting session")
 		sess := newSession(conn, s.tun, s.cfg)
 		sess.run(ctx)
-		logf("AOA: session ended — waiting for reconnect")
 		conn.Close()
+		s.state.Set(StateDisconnected)
+		logf("AOA: session ended — waiting for reconnect")
 	}
 }
 
-func (s *AoaServer) waitForDevice(ctx context.Context, usbCtx *gousb.Context) (*AoaConn, error) {
-	for ctx.Err() == nil {
+func (s *AoaServer) connectWithBackoff(ctx context.Context, usbCtx *gousb.Context) (*AoaConn, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= aoaMaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		if conn, err := s.openAccessory(usbCtx); err == nil {
 			return conn, nil
+		} else {
+			lastErr = err
 		}
-		if err := s.negotiateAccessory(usbCtx); err != nil {
-			debugf("AOA negotiate: %v", err)
+
+		if err := s.negotiateAccessory(usbCtx); err == nil {
+			// Give Android time to re-enumerate as an accessory, but keep the
+			// wait interruptible so shutdown is immediate.
+			if err := waitContext(ctx, aoaDetectWait); err != nil {
+				return nil, err
+			}
+			if conn, err := s.openAccessory(usbCtx); err == nil {
+				return conn, nil
+			} else {
+				lastErr = err
+			}
+		} else {
+			lastErr = fmt.Errorf("AOA negotiation: %w", err)
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(2500 * time.Millisecond):
+
+		backoff := aoaBackoffMin << (attempt - 1)
+		if backoff > aoaBackoffMax {
+			backoff = aoaBackoffMax
+		}
+		debugf("AOA detection attempt %d/%d failed: %v; retrying in %s", attempt, aoaMaxAttempts, lastErr, backoff)
+		if err := waitContext(ctx, backoff); err != nil {
+			return nil, err
 		}
 	}
-	return nil, ctx.Err()
+
+	return nil, fmt.Errorf("AOA connection unavailable after %d attempts: %w", aoaMaxAttempts, lastErr)
 }
 
-// openAccessory tries to open an already-enumerated AOA device.
+func waitContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 	devs, err := usbCtx.OpenDevices(func(desc *gousb.DeviceDesc) bool {
 		return desc.Vendor == googleVID &&
@@ -257,7 +238,7 @@ func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 		for _, d := range devs {
 			d.Close()
 		}
-		return nil, fmt.Errorf("no accessory device found")
+		return nil, fmt.Errorf("no OpenTether accessory detected")
 	}
 	dev := devs[0]
 	for _, d := range devs[1:] {
@@ -265,7 +246,6 @@ func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 	}
 
 	dev.SetAutoDetach(true)
-
 	intf, done, err := dev.DefaultInterface()
 	if err != nil {
 		dev.Close()
@@ -274,7 +254,6 @@ func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 
 	var inEp *gousb.InEndpoint
 	var outEp *gousb.OutEndpoint
-
 	for _, ep := range intf.Setting.Endpoints {
 		if ep.Direction == gousb.EndpointDirectionIn && ep.TransferType == gousb.TransferTypeBulk {
 			inEp, _ = intf.InEndpoint(ep.Number)
@@ -291,8 +270,7 @@ func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 	}
 
 	serial, _ := dev.SerialNumber()
-	logf("AOA: opened accessory device (serial=%s, IN ep%d, OUT ep%d)",
-		serial, inEp.Desc.Number, outEp.Desc.Number)
+	logf("AOA: accessory detected (serial=%s, IN ep%d, OUT ep%d)", serial, inEp.Desc.Number, outEp.Desc.Number)
 
 	pr, pw := io.Pipe()
 	conn := &AoaConn{
@@ -307,13 +285,10 @@ func (s *AoaServer) openAccessory(usbCtx *gousb.Context) (*AoaConn, error) {
 		remoteAddr: usbAddr{serial},
 		closed:     make(chan struct{}),
 	}
-	// Start the read pump. It runs until Close() is called or the USB device
-	// disconnects. All data from the Android device flows through it.
 	go conn.readPump()
 	return conn, nil
 }
 
-// negotiateAccessory finds any Android device and switches it into AOA mode.
 func (s *AoaServer) negotiateAccessory(usbCtx *gousb.Context) error {
 	devs, err := usbCtx.OpenDevices(func(desc *gousb.DeviceDesc) bool {
 		for _, vid := range androidVIDs {
