@@ -6,7 +6,7 @@ object Constants {
 
     const val VPN_CLIENT_IP    = "10.0.0.1"
     const val VPN_RELAY_IP     = "10.0.0.2"
-    const val VPN_DNS_SERVER   = "8.8.8.8" 
+    const val VPN_DNS_SERVER   = "8.8.8.8"
     const val VPN_PREFIX       = 24
     const val VPN_MTU          = 1400
     const val VPN_SESSION_NAME = "OpenTether"
@@ -17,6 +17,7 @@ object Constants {
     const val RELAY_PORT          = 8765
     const val CONNECT_TIMEOUT_MS  = 5_000L
     const val RECONNECT_DELAY_MS  = 2_000L
+    const val MAX_RECONNECT_DELAY_MS = 30_000L
 
     // ── OTP Protocol ─────────────────────────────────────────────────────────
 
