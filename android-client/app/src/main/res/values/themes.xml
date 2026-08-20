@@ -21,6 +21,5 @@
         <item name="android:statusBarColor">@color/backgroundDark</item>
         <item name="android:navigationBarColor">@color/backgroundDark</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
