@@ -138,7 +138,7 @@ func (s *session) androidToTun(ctx context.Context) {
 // even when no packets are arriving (TUN fds don't use Go's netpoller).
 func (s *session) tunToAndroid(ctx context.Context) {
 	buf := make([]byte, s.cfg.MTU+4)
-	fd  := s.tun.Fd()
+	fd := s.tun.Fd()
 
 	// Select write strategy based on transport type.
 	var fw FrameWriter
