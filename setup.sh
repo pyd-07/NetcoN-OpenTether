@@ -171,7 +171,6 @@ fi
 
 APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
 APK_NAME="opentether-v0.9.3.apk"
-APK_URL="https://github.com/piyushyadav-pyd/NetcoN-OpenTether/releases/download/v0.9.3/$APK_NAME"
 cp "$APK_SRC" "../$APK_NAME"
 info "APK built → ./$APK_NAME"
 cd ..
