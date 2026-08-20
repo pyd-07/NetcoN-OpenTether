@@ -3,7 +3,6 @@
 
     <!-- ── Permissions ──────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
@@ -18,8 +17,8 @@
         android:required="false" />
     <!--
       required="false" means the app is still listed on devices without USB
-      host support (e.g. some budget phones). The AOA transport simply won't
-      be available there; the ADB-based transport still works.
+      host support (e.g. some budget phones). The AOA transport simply won't be
+      available there; the ADB-based transport still works.
     -->
 
     <application
