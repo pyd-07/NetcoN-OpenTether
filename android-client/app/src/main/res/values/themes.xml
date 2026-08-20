@@ -5,7 +5,7 @@
         theme attributes are irrelevant. This file only controls the window
         chrome (status bar, navigation bar) before Compose content is drawn.
     -->
-    <style name="Theme.OpenTether" parent="Theme.MaterialComponents.NoActionBar">
+    <style name="Theme.OpenTether.Base" parent="Theme.MaterialComponents.NoActionBar">
         <!-- Primary brand color (also applied to action-mode toolbar) -->
         <item name="colorPrimary">@color/primary</item>
         <!-- colorPrimaryVariant used by legacy widgets; keep in sync with primary -->
@@ -22,4 +22,6 @@
         <item name="android:navigationBarColor">@color/backgroundDark</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <style name="Theme.OpenTether" parent="Theme.OpenTether.Base" />
 </resources>
