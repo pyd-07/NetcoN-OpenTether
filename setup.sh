@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015
+# SC2015 is intentionally used below for fail-fast command chains where the
+# final branch calls error/warn after a failed command.
 # ══════════════════════════════════════════════════════════════════════════════
 #   OpenTether (NetcoN) Setup Script - v0.9.3
 #  | Tested on Debian / Ubuntu (amd64 + arm64)
@@ -171,7 +174,6 @@ fi
 
 APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
 APK_NAME="opentether-v0.9.3.apk"
-APK_URL="https://github.com/piyushyadav-pyd/NetcoN-OpenTether/releases/download/v0.9.3/$APK_NAME"
 cp "$APK_SRC" "../$APK_NAME"
 info "APK built → ./$APK_NAME"
 cd ..

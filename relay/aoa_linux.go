@@ -333,7 +333,7 @@ func (s *AoaServer) negotiateAccessory(usbCtx *gousb.Context) error {
 	defer dev.Close()
 
 	const (
-		ctrlIn  = uint8(gousb.ControlIn)  | uint8(gousb.ControlVendor) | uint8(gousb.ControlDevice)
+		ctrlIn  = uint8(gousb.ControlIn) | uint8(gousb.ControlVendor) | uint8(gousb.ControlDevice)
 		ctrlOut = uint8(gousb.ControlOut) | uint8(gousb.ControlVendor) | uint8(gousb.ControlDevice)
 	)
 

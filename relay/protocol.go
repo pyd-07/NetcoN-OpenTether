@@ -51,10 +51,10 @@ func ReadFrame(r io.Reader) (Frame, error) {
 		return Frame{}, fmt.Errorf("read header: %w", err)
 	}
 
-	connID  := binary.BigEndian.Uint32(hdr[0:4])
-	payLen  := binary.BigEndian.Uint32(hdr[4:8])
+	connID := binary.BigEndian.Uint32(hdr[0:4])
+	payLen := binary.BigEndian.Uint32(hdr[4:8])
 	msgType := hdr[8]
-	flags   := hdr[9]
+	flags := hdr[9]
 	// hdr[10:12] reserved — ignored on read
 
 	if payLen > MaxPayloadSize {

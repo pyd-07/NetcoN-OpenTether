@@ -1,4 +1,5 @@
 package main
+
 // mock_android simulates what the Android VPN client would do:
 // 1. Connect to relay TCP port
 // 2. Send a raw DNS query (UDP to 8.8.8.8:53) wrapped in an OTP DATA frame
@@ -12,7 +13,7 @@ import (
 )
 
 const (
-	frameHeaderSize = 12
+	frameHeaderSize       = 12
 	msgData         uint8 = 0x01
 )
 
@@ -96,8 +97,8 @@ func buildDNSPacket() []byte {
 		0x00, 0x01, // QCLASS: IN
 	}
 
-	srcIP := [4]byte{10, 0, 0, 1}   // Android VPN IP
-	dstIP := [4]byte{8, 8, 8, 8}    // Google DNS
+	srcIP := [4]byte{10, 0, 0, 1} // Android VPN IP
+	dstIP := [4]byte{8, 8, 8, 8}  // Google DNS
 	srcPort := uint16(54321)
 	dstPort := uint16(53)
 
@@ -113,13 +114,13 @@ func buildDNSPacket() []byte {
 	// IPv4 header (20 bytes, no options)
 	totalLen := uint16(20 + len(udp))
 	ip := make([]byte, 20)
-	ip[0] = 0x45             // version=4, IHL=5
-	ip[1] = 0                // DSCP/ECN
+	ip[0] = 0x45 // version=4, IHL=5
+	ip[1] = 0    // DSCP/ECN
 	binary.BigEndian.PutUint16(ip[2:4], totalLen)
 	binary.BigEndian.PutUint16(ip[4:6], 0xABCD) // ID
-	ip[6] = 0x40             // flags: don't fragment
-	ip[8] = 64               // TTL
-	ip[9] = 17               // protocol: UDP
+	ip[6] = 0x40                                // flags: don't fragment
+	ip[8] = 64                                  // TTL
+	ip[9] = 17                                  // protocol: UDP
 	copy(ip[12:16], srcIP[:])
 	copy(ip[16:20], dstIP[:])
 	binary.BigEndian.PutUint16(ip[10:12], ipChecksum(ip))

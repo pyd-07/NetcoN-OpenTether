@@ -15,8 +15,8 @@ import (
 // Call Cleanup() on shutdown to remove all rules added by this setup.
 type NetworkSetup struct {
 	cfg      Config
-	OutIface string    // resolved outbound interface name
-	undoList []func()  // cleanup functions in reverse order
+	OutIface string   // resolved outbound interface name
+	undoList []func() // cleanup functions in reverse order
 }
 
 // NewNetworkSetup configures the OS for relaying:
@@ -112,8 +112,8 @@ func NewNetworkSetup(cfg Config, tun *TunDevice) (*NetworkSetup, error) {
 
 	// Assign an IPv6 address to the TUN interface.
 	// We use a unique-local (fc00::/7) address — no ISP allocation needed.
-	tun6CIDR    := "fdcc::2/64"
-	android6    := "fdcc::1"
+	tun6CIDR := "fdcc::2/64"
+	android6 := "fdcc::1"
 	android6CIDR := android6 + "/128"
 
 	if err := runCmd("ip", "-6", "addr", "replace", tun6CIDR, "dev", tunName); err != nil {
@@ -200,6 +200,7 @@ func ipt(args ...string) error {
 	debugf("$ iptables %v", args)
 	return nil
 }
+
 // ip6t runs an ip6tables command with the same error-swallowing logic as ipt.
 func ip6t(args ...string) error {
 	out, err := exec.Command("ip6tables", args...).CombinedOutput()
