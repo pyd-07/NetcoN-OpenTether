@@ -16,6 +16,7 @@ import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger
 import com.opentether.runtime.TunnelRuntimeHolder
 import com.opentether.tunnel.AoaTunnelClient
+import com.opentether.tunnel.UsbTunnelClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,8 +26,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.InetAddress
-
-import com.opentether.tunnel.UsbTunnelClient
 
 private const val TAG = "OT/VpnService"
 
@@ -82,6 +81,14 @@ class OpenTetherVpnService : VpnService() {
     // ── VPN start / stop ───────────────────────────────────────────────────
 
     private fun startVpn() {
+        // Android may deliver another START intent while the existing VPN
+        // service is still alive. Establishing a second TUN interface here
+        // would create duplicate readers/writers and multiple transport loops.
+        if (vpnInterface != null) {
+            AppLogger.w(TAG, "VPN already running — ignoring duplicate START")
+            return
+        }
+
         val transport = AppPreferences.current(this).preferredTransport
         TunnelRuntimeHolder.onServiceStarting(transport)
 
