@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015
+# SC2015 is intentionally used below for fail-fast command chains where the
+# final branch calls error/warn after a failed command.
 # ══════════════════════════════════════════════════════════════════════════════
 #   OpenTether (NetcoN) Setup Script - v0.9.3
 #  | Tested on Debian / Ubuntu (amd64 + arm64)
