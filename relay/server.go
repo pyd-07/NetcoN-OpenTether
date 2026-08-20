@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 )
 
-// Server owns the TUN device, TCP listener, and ADB watcher, and manages
-// the lifecycle of Android client sessions.
+// Server owns the TUN device, TCP listener, ADB watcher, and manages the
+// lifecycle of Android client sessions.
 type Server struct {
 	cfg      Config
 	tun      *TunDevice
@@ -17,11 +17,9 @@ type Server struct {
 	stopped  atomic.Bool
 	ctx      context.Context
 	cancel   context.CancelFunc
+	state    *ConnectionStateTracker
 }
 
-// NewServer creates the TUN interface, configures networking, and starts
-// the TCP listener. Returns an error if any step fails.
-// Must be run as root (or with CAP_NET_ADMIN + CAP_NET_RAW).
 func NewServer(cfg Config) (*Server, error) {
 	setVerbose(cfg.Verbose)
 
@@ -52,16 +50,10 @@ func NewServer(cfg Config) (*Server, error) {
 		listener: ln,
 		ctx:      ctx,
 		cancel:   cancel,
+		state:    NewConnectionStateTracker(),
 	}, nil
 }
 
-// Run accepts Android client connections and handles reconnections automatically.
-//
-// If cfg.DisableAdbWatch is false (the default), an AdbWatcher is started in
-// the background. It polls `adb devices` every 2 s and runs
-// `adb reverse tcp:PORT tcp:PORT` automatically whenever a device appears.
-//
-// Blocks until Stop() is called.
 func (s *Server) Run() error {
 	defer s.cleanup()
 
@@ -69,9 +61,10 @@ func (s *Server) Run() error {
 		port := listenPort(s.cfg.ListenAddr)
 		watcher := NewAdbWatcher(port)
 		go watcher.Watch(s.ctx)
-		logf("ADB watcher started — `adb reverse tcp:%d tcp:%d` runs automatically", port, port)
+		logf("ADB watcher started — automatic device detection and reconnect enabled")
 	}
 
+	s.state.Set(StateDisconnected)
 	logf("ready — waiting for Android on %s", s.cfg.ListenAddr)
 
 	for {
@@ -80,37 +73,51 @@ func (s *Server) Run() error {
 			return nil
 		}
 		if err != nil {
+			if s.ctx.Err() != nil {
+				return nil
+			}
+			s.state.Fail(fmt.Errorf("accept: %w", err))
 			errorf("accept: %v", err)
 			continue
 		}
 
 		if tc, ok := conn.(*net.TCPConn); ok {
-			tc.SetKeepAlive(true)
+			if err := tc.SetKeepAlive(true); err != nil {
+				debugf("TCP keepalive setup for %s failed: %v", conn.RemoteAddr(), err)
+			}
 		}
 
-		logf("Android connected from %s", conn.RemoteAddr())
+		s.state.Set(StateConnected)
+		logf("Android connected from %s — session starting", conn.RemoteAddr())
 		sess := newSession(conn, s.tun, s.cfg)
 		sess.run(s.ctx)
-		logf("session ended — waiting for reconnect")
+		s.state.Set(StateDisconnected)
+		logf("Android session ended — waiting for reconnect")
 	}
 }
 
-// Stop shuts down the server, closes the listener, and cleans up networking.
 func (s *Server) Stop() {
-	s.stopped.Store(true)
+	if s.stopped.Swap(true) {
+		return
+	}
+	s.state.Set(StateStopping)
 	s.cancel()
-	s.listener.Close()
+	if err := s.listener.Close(); err != nil {
+		debugf("listener close: %v", err)
+	}
 }
 
 func (s *Server) cleanup() {
+	s.state.Set(StateStopping)
 	logf("removing iptables rules and routes...")
 	s.netSetup.Cleanup()
-	s.tun.Close()
+	if err := s.tun.Close(); err != nil {
+		debugf("TUN close: %v", err)
+	}
+	s.state.Set(StateDisconnected)
 	logf("shutdown complete")
 }
 
-// listenPort extracts the port number from a "host:port" address string.
-// Falls back to 8765 on any parse error.
 func listenPort(addr string) int {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
