@@ -4,9 +4,21 @@ The goal of the next releases is to make OpenTether reliable across a broad rang
 
 The roadmap is intentionally split into small releases so that each phase can be tested and released independently.
 
-## v0.9.4 - Core Stability
+## v0.9.4 - Stability Release
 
 **Goal:** Make the existing ADB and AOA implementations reliable before expanding compatibility.
+
+### Improved
+
+- Improved ADB connection detection.
+- Improved AOA accessory detection.
+- Improved relay session lifecycle.
+- Improved shutdown and resource cleanup.
+- Improved error reporting for failed transport connections.
+- Added bounded reconnect backoff.
+- Added explicit connection states.
+
+### Scope
 
 - Fix ADB reconnect after USB disconnect/reconnect.
 - Fix relay connection state after unexpected disconnects.
@@ -16,8 +28,6 @@ The roadmap is intentionally split into small releases so that each phase can be
 - Prevent multiple sessions during reconnect.
 - Keep VPN state synchronized with relay state.
 - Reset RTT and statistics after disconnect.
-- Improve ADB/AOA connection detection.
-- Add bounded reconnect backoff and explicit connection states.
 - Test USB unplug/replug, relay restart, VPN stop/start, and screen lock/unlock.
 
 **Exit condition:** A normal USB disconnect/reconnect should restore internet access without restarting the application.
