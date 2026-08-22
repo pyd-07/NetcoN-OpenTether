@@ -5,13 +5,40 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
-  # ── Job 1: Build APK + relay binaries and publish a GitHub Release ─────────
-  build-and-release:
-    name: Build and release
+  test:
+    name: Validate release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build standard relay
+        run: go build ./...
+
+      - name: Install libusb
+        run: sudo apt-get install -y libusb-1.0-0-dev
+
+      - name: Build AOA relay
+        run: go build -tags aoa ./...
+
+  build-and-release:
+    name: Build and publish release assets
+    needs: test
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -27,147 +54,55 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
+          distribution: temurin
           cache: gradle
 
       - name: Grant Gradle execute permission
         working-directory: android-client
         run: chmod +x gradlew
 
-      - name: Build release APK
+      - name: Build Android beta APK
         working-directory: android-client
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
-      - name: Rename APK
+      - name: Rename Android APK
         run: |
-          mv android-client/app/build/outputs/apk/debug/app-debug.apk \
-             android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
+          cp android-client/app/build/outputs/apk/debug/app-debug.apk \
+            OpenTether-${GITHUB_REF_NAME}-android.apk
 
-      # ── Standard relay builds (ADB transport, no extra deps) ──────────────
-      - name: Build relay — Linux amd64
-        run: GOARCH=amd64 go build -o relay-linux-amd64 .
+      - name: Build Linux relay — amd64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-amd64 .
 
-      - name: Build relay — Linux arm64
-        run: GOARCH=arm64 go build -o relay-linux-arm64 .
+      - name: Build Linux relay — arm64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-arm64 .
 
-      # ── AOA relay builds (requires libusb) ────────────────────────────────
-      - name: Install libusb for AOA builds
+      - name: Install libusb for AOA build
         run: sudo apt-get install -y libusb-1.0-0-dev
 
-      - name: Build relay — Linux amd64 (AOA)
-        run: GOARCH=amd64 go build -tags aoa -o relay-linux-amd64-aoa .
+      - name: Build Linux AOA relay — amd64
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -tags aoa -o OpenTether-${GITHUB_REF_NAME}-linux-amd64-aoa .
 
-      # arm64 cross-compile with CGO (libusb) requires a cross toolchain;
-      # skip for now and document that AOA arm64 must be built natively.
-      # - name: Build relay — Linux arm64 (AOA)
-      #   run: GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc go build -tags aoa -o relay-linux-arm64-aoa .
+      - name: Generate checksums
+        run: sha256sum OpenTether-${GITHUB_REF_NAME}-* > OpenTether-${GITHUB_REF_NAME}-SHA256SUMS.txt
 
-      # ── Publish ───────────────────────────────────────────────────────────
+      - name: Determine prerelease status
+        id: release
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-alpha* || "$GITHUB_REF_NAME" == *-beta* || "$GITHUB_REF_NAME" == *-rc* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: OpenTether ${{ github.ref_name }}
-          body: |
-            ## OpenTether ${{ github.ref_name }}
-
-            Reverse USB tethering for Android — route your phone's traffic through your PC via USB, no root required.
-
-            ---
-
-            ### Quick install (recommended)
-
-            ```bash
-            git clone https://github.com/pyd-07/NetcoN-OpenTether.git
-            cd NetcoN-OpenTether
-            sudo ./setup.sh          # ADB transport  (USB debugging required)
-            sudo ./setup.sh --aoa    # AOA transport  (no USB debugging needed)
-            ```
-
-            ---
-
-            ### Manual install
-
-            #### 1 — Android app
-
-            Download `opentether-${{ github.ref_name }}.apk` and install it:
-
-            ```bash
-            adb install opentether-${{ github.ref_name }}.apk
-            # or open the APK file directly on the phone
-            ```
-
-            #### 2 — PC relay
-
-            Pick the binary for your setup:
-
-            | File | Transport | When to use |
-            |---|---|---|
-            | `relay-linux-amd64` | ADB (TCP over USB) | Default — needs USB debugging |
-            | `relay-linux-arm64` | ADB (TCP over USB) | Raspberry Pi / ARM64 PC |
-            | `relay-linux-amd64-aoa` | AOA (direct USB) | No USB debugging needed |
-
-            ```bash
-            chmod +x relay-linux-amd64
-            sudo ./relay-linux-amd64
-            ```
-
-            The relay sets up `adb reverse` automatically — no manual tunnel setup needed.
-
-            #### AOA binary extra step
-
-            The AOA binary links against libusb. Install it before running:
-
-            ```bash
-            sudo apt install libusb-1.0-0
-            sudo ./relay-linux-amd64-aoa
-            ```
-
-            ---
-
-            ### Requirements
-
-            - **PC**: Linux (kernel 3.17+), root or `CAP_NET_ADMIN`
-            - **Android**: 8.0+ (API 26), no root required
-            - **ADB transport**: USB debugging enabled
-            - **AOA transport**: no USB debugging — one-time consent dialog on first connect
-
-            ---
-
-            ### What's new in ${{ github.ref_name }}
-
-            - Auto ADB tunnel — relay runs `adb reverse` automatically on device connect
-            - AOA transport — direct USB pipe, no ADB or USB debugging required
-            - UDP / DNS batching — ~38 % fewer syscalls for DNS-heavy workloads
-            - IPv6 NAT — `ip6tables MASQUERADE` for all IPv6 traffic
-
+          generate_release_notes: true
+          prerelease: ${{ steps.release.outputs.prerelease }}
           files: |
-            android-client/app/build/outputs/apk/debug/opentether-${{ github.ref_name }}.apk
-            relay-linux-amd64
-            relay-linux-arm64
-            relay-linux-amd64-aoa
-
-  # ── Job 2: Run tests and verify the standard build compiles cleanly ────────
-  test:
-    name: Test and build check
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run protocol tests
-        run: go test ./...
-
-      - name: Build check (standard, no AOA)
-        run: go build ./...
-
-      - name: Build check (AOA)
-        run: |
-          sudo apt-get install -y libusb-1.0-0-dev
-          go build -tags aoa ./...
+            OpenTether-${{ github.ref_name }}-android.apk
+            OpenTether-${{ github.ref_name }}-linux-amd64
+            OpenTether-${{ github.ref_name }}-linux-arm64
+            OpenTether-${{ github.ref_name }}-linux-amd64-aoa
+            OpenTether-${{ github.ref_name }}-SHA256SUMS.txt
