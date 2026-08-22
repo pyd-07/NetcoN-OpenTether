@@ -92,8 +92,9 @@ class OpenTetherVpnService : VpnService() {
             return
         }
 
+        val transport = AppPreferences.current(this).preferredTransport
         if (!promoteToForeground()) {
-            val transport = AppPreferences.current(this).preferredTransport
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "foreground startup failed")
             TunnelRuntimeHolder.onError(transport, "Foreground service startup failed")
             stopSelfResult(startId)
@@ -101,10 +102,10 @@ class OpenTetherVpnService : VpnService() {
         }
 
         stopping = false
-        val transport = AppPreferences.current(this).preferredTransport
         TunnelRuntimeHolder.onServiceStarting(transport)
 
         val iface = buildVpnInterface() ?: run {
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "establish() returned null")
             TunnelRuntimeHolder.onError(transport, "Unable to create VPN interface")
             stopSelfResult(startId)
@@ -117,6 +118,7 @@ class OpenTetherVpnService : VpnService() {
             tunnelSession = session
             session.start()
         } catch (e: Exception) {
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "failed to start tunnel session: ${e.message}")
             session.stop()
             try {
