@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
+import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.opentether.Constants
@@ -19,6 +21,7 @@ import com.opentether.tunnel.AoaTunnelClient
 import com.opentether.tunnel.UsbTunnelClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -30,36 +33,55 @@ import java.net.InetAddress
 private const val TAG = "OT/VpnService"
 
 const val ACTION_START = "com.opentether.action.START"
-const val ACTION_STOP  = "com.opentether.action.STOP"
+const val ACTION_STOP = "com.opentether.action.STOP"
 
 class OpenTetherVpnService : VpnService() {
 
-    private val serviceJob   = SupervisorJob()
-    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
-
     @Volatile private var vpnInterface: ParcelFileDescriptor? = null
+    private var serviceScope: CoroutineScope? = null
+    private var serviceJob: Job? = null
+    private var runtimeJob: Job? = null
+    private var outboundChannel: Channel<ByteArray>? = null
+    private var inboundChannel: Channel<ByteArray>? = null
+    private var stopping = false
 
-    private val outboundChannel = Channel<ByteArray>(Constants.OUTBOUND_CHANNEL_CAPACITY)
-    private val inboundChannel  = Channel<ByteArray>(Constants.INBOUND_CHANNEL_CAPACITY)
-
-    // ── Service lifecycle ──────────────────────────────────────────────────
+    override fun onCreate() {
+        super.onCreate()
+        AppLogger.i(TAG, "onCreate")
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> {
-                AppLogger.i(TAG, "START received")
-                startForegroundNotification()
-                startVpn()
-            }
             ACTION_STOP -> {
                 AppLogger.i(TAG, "STOP received")
                 stopVpn()
-                stopSelf()
+                stopSelfResult(startId)
+            }
+            ACTION_START -> {
+                AppLogger.i(TAG, "START received")
+                if (!promoteToForeground()) {
+                    AppLogger.e(TAG, "foreground startup failed")
+                    TunnelRuntimeHolder.onError(
+                        AppPreferences.current(this).preferredTransport,
+                        "Foreground service startup failed",
+                    )
+                    stopSelfResult(startId)
+                } else {
+                    startVpn()
+                }
             }
             else -> {
-                AppLogger.i(TAG, "restarted by system")
-                startForegroundNotification()
-                startVpn()
+                AppLogger.i(TAG, "service recreated by system")
+                if (!promoteToForeground()) {
+                    AppLogger.e(TAG, "foreground startup failed after service recreation")
+                    TunnelRuntimeHolder.onError(
+                        AppPreferences.current(this).preferredTransport,
+                        "Foreground service startup failed after service recreation",
+                    )
+                    stopSelfResult(startId)
+                } else {
+                    startVpn()
+                }
             }
         }
         return START_STICKY
@@ -67,8 +89,8 @@ class OpenTetherVpnService : VpnService() {
 
     override fun onRevoke() {
         AppLogger.i(TAG, "revoked by system")
-        super.onRevoke()
         stopVpn()
+        super.onRevoke()
         stopSelf()
     }
 
@@ -78,50 +100,51 @@ class OpenTetherVpnService : VpnService() {
         super.onDestroy()
     }
 
-    // ── VPN start / stop ───────────────────────────────────────────────────
+    override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
     private fun startVpn() {
-        // Android may deliver another START intent while the existing VPN
-        // service is still alive. Establishing a second TUN interface here
-        // would create duplicate readers/writers and multiple transport loops.
-        if (vpnInterface != null) {
-            AppLogger.w(TAG, "VPN already running — ignoring duplicate START")
+        if (vpnInterface != null || serviceScope != null) {
+            AppLogger.w(TAG, "VPN already active — ignoring duplicate START")
             return
         }
 
+        stopping = false
         val transport = AppPreferences.current(this).preferredTransport
         TunnelRuntimeHolder.onServiceStarting(transport)
 
         val iface = buildVpnInterface() ?: run {
-            AppLogger.e(TAG, "establish() returned null — aborting")
+            AppLogger.e(TAG, "establish() returned null")
             TunnelRuntimeHolder.onError(transport, "Unable to create VPN interface")
             stopSelf()
             return
         }
-        vpnInterface = iface
-        AppLogger.i(TAG, "TUN interface established (fd=${iface.fd})")
 
+        vpnInterface = iface
+        outboundChannel = Channel(Constants.OUTBOUND_CHANNEL_CAPACITY)
+        inboundChannel = Channel(Constants.INBOUND_CHANNEL_CAPACITY)
+        serviceJob = SupervisorJob()
+        serviceScope = CoroutineScope(Dispatchers.IO + serviceJob!!)
+
+        AppLogger.i(TAG, "TUN interface established (fd=${iface.fd})")
         StatsHolder.setRunning(true)
         TunnelRuntimeHolder.onTunEstablished()
 
-        val fd = iface.fileDescriptor
-        TunReader(fd, outboundChannel).start(serviceScope)
-        TunWriter(fd, inboundChannel).start(serviceScope)
+        val scope = serviceScope!!
+        val outbound = outboundChannel!!
+        val inbound = inboundChannel!!
+
+        TunReader(iface.fileDescriptor, outbound).start(scope)
+        TunWriter(iface.fileDescriptor, inbound).start(scope)
         when (transport) {
-            TunnelTransport.ADB -> UsbTunnelClient(outboundChannel, inboundChannel, this).start(serviceScope)
-            TunnelTransport.AOA -> AoaTunnelClient(outboundChannel, inboundChannel, this).start(serviceScope)
+            TunnelTransport.ADB -> UsbTunnelClient(outbound, inbound, this).start(scope)
+            TunnelTransport.AOA -> AoaTunnelClient(outbound, inbound, this).start(scope)
         }
 
-        // ── Stats ticker ──────────────────────────────────────────────────
-        // Runs every second regardless of relay connection state.
-        // Samples StatsHolder's atomic byte counters and publishes VpnStats.
-        serviceScope.launch(Dispatchers.IO) {
-            AppLogger.i(TAG, "stats ticker started")
+        runtimeJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(1_000L)
                 StatsHolder.tick()
             }
-            AppLogger.i(TAG, "stats ticker stopped")
         }
 
         AppLogger.i(TAG, "VPN running — connecting via ${transport.label}")
@@ -146,59 +169,87 @@ class OpenTetherVpnService : VpnService() {
     }
 
     private fun stopVpn() {
+        if (stopping && vpnInterface == null && serviceScope == null) return
+        stopping = true
+
         AppLogger.i(TAG, "stopping")
         StatsHolder.setRunning(false)
         TunnelRuntimeHolder.onServiceStopping()
-        serviceScope.cancel("VPN stopped")
-        outboundChannel.close()
-        inboundChannel.close()
-        try { vpnInterface?.close() } catch (e: Exception) {
+
+        runtimeJob?.cancel()
+        runtimeJob = null
+        serviceScope?.cancel("VPN stopped")
+        serviceScope = null
+        serviceJob = null
+
+        outboundChannel?.close()
+        outboundChannel = null
+        inboundChannel?.close()
+        inboundChannel = null
+
+        try {
+            vpnInterface?.close()
+        } catch (e: Exception) {
             AppLogger.w(TAG, "error closing TUN: ${e.message}")
         }
         vpnInterface = null
+
         TunnelRuntimeHolder.onStopped()
         AppLogger.i(TAG, "stopped")
     }
 
-    // ── Foreground notification ────────────────────────────────────────────
+    private fun promoteToForeground(): Boolean {
+        return try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(Constants.NOTIFICATION_CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        Constants.NOTIFICATION_CHANNEL_ID,
+                        "OpenTether VPN",
+                        NotificationManager.IMPORTANCE_LOW,
+                    ).apply { description = "Active while USB tethering is running" },
+                )
+            }
 
-    private fun startForegroundNotification() {
-        val nm = getSystemService(NotificationManager::class.java)
-
-        if (nm.getNotificationChannel(Constants.NOTIFICATION_CHANNEL_ID) == null) {
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    Constants.NOTIFICATION_CHANNEL_ID,
-                    "OpenTether VPN",
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply { description = "Active while USB tethering is running" }
+            val openApp = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE,
             )
+
+            val stopIntent = PendingIntent.getService(
+                this,
+                1,
+                Intent(this, OpenTetherVpnService::class.java).apply { action = ACTION_STOP },
+                PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val notification: Notification = NotificationCompat
+                .Builder(this, Constants.NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("NetcoN OpenTether active")
+                .setContentText("Routing traffic through workstation")
+                .setContentIntent(openApp)
+                .addAction(android.R.drawable.ic_delete, "Stop", stopIntent)
+                .setOngoing(true)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    Constants.NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(Constants.NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "startForeground failed: ${e.message}")
+            false
         }
-
-        val openApp = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val stopIntent = PendingIntent.getService(
-            this, 1,
-            Intent(this, OpenTetherVpnService::class.java).apply { action = ACTION_STOP },
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val notification: Notification = NotificationCompat
-            .Builder(this, Constants.NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("NetcoN OpenTether active")
-            .setContentText("Routing traffic through workstation")
-            .setContentIntent(openApp)
-            .addAction(android.R.drawable.ic_delete, "Stop", stopIntent)
-            .setOngoing(true)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
-
-        startForeground(Constants.NOTIFICATION_ID, notification)
     }
 
     private fun normalizeDnsServer(value: String): String {
