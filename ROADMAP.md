@@ -36,15 +36,31 @@ The roadmap is intentionally split into small releases so that each phase can be
 
 **Goal:** Handle Android versions, lifecycle behavior, and OEM restrictions correctly.
 
-- Audit Android API-level compatibility.
-- Improve VPN service lifecycle handling.
-- Review foreground-service behavior for Android 14+.
-- Handle service recreation and process death.
-- Fix screen lock/unlock behavior.
-- Improve USB permission handling across Android versions.
-- Improve AOA permission handling.
+### Phase 1 — Fixed
+
+- Fix VPN service behavior after screen lock.
+- Fix VPN service behavior after process recreation.
+- Fix foreground-service startup failures.
+- Fix VPN shutdown after system service recreation.
+- Fix USB permission handling across Android versions.
+- Fix AOA permission handling on newer Android releases.
+- Fix Activity/service lifecycle race conditions.
+
+### Phase 2 — Added
+
 - Add device information detection.
 - Add battery optimization diagnostics.
+- Add explicit Android compatibility diagnostics.
+- Add lifecycle and USB permission test coverage where practical.
+
+### Phase 3 — Improved
+
+- Improve VPN service lifecycle handling.
+- Improve foreground-service behavior on Android 14+.
+- Improve service recreation and process-death recovery.
+- Improve screen lock/unlock behavior.
+- Improve USB permission handling across Android versions.
+- Improve AOA permission handling.
 - Test Android 8 through the latest supported Android release.
 - Test Pixel, Samsung, Xiaomi, OnePlus, Motorola, Oppo, Realme, and Vivo devices.
 
