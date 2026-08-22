@@ -48,10 +48,14 @@ The roadmap is intentionally split into small releases so that each phase can be
 
 ### Phase 2 — Added
 
-- Add device information detection.
-- Add battery optimization diagnostics.
-- Add explicit Android compatibility diagnostics.
-- Add lifecycle and USB permission test coverage where practical.
+- Added Android API-level compatibility detection.
+- Added lifecycle-aware VPN requested-state persistence and service recreation handling.
+- Added Android 14+ foreground-service compatibility handling using the declared service type.
+- Added device information detection: manufacturer, model, Android version, API level, security patch, and supported ABIs.
+- Added battery optimization diagnostics and direct access to Android battery settings.
+- Added Android-specific troubleshooting information for common OEM and transport issues.
+- Added diagnostics UI exposing compatibility, device, VPN service, battery, and troubleshooting state.
+- Added unit coverage for API compatibility policy boundaries.
 
 ### Phase 3 — Improved
 
