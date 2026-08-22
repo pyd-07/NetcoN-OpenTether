@@ -43,7 +43,7 @@ object AndroidDiagnosticsProvider {
         val manufacturer = Build.MANUFACTURER.trim().ifBlank { "Unknown" }
         val model = Build.MODEL.trim().ifBlank { "Unknown" }
         val normalizedManufacturer = manufacturer.lowercase()
-        val compatibility = compatibilityFor(apiLevel)
+        val compatibility = compatibilityForApi(apiLevel)
 
         return AndroidDiagnostics(
             manufacturer = manufacturer,
@@ -84,7 +84,7 @@ object AndroidDiagnosticsProvider {
         )
     }
 
-    private fun compatibilityFor(apiLevel: Int): Pair<String, String> = when {
+    internal fun compatibilityForApi(apiLevel: Int): Pair<String, String> = when {
         apiLevel < 26 -> "Unsupported" to "OpenTether requires Android 8.0 (API 26) or newer."
         apiLevel < 29 -> "Supported" to "Android 8–9 uses the legacy foreground-service path."
         apiLevel < 31 -> "Supported" to "Android 10–11 supports typed foreground services and VPN lifecycle handling."
