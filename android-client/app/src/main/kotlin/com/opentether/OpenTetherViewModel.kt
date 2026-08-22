@@ -3,11 +3,15 @@ package com.opentether
 import android.app.Application
 import android.content.Intent
 import android.net.VpnService
+import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.opentether.data.AppPreferences
 import com.opentether.data.AppSettings
 import com.opentether.data.TunnelTransport
+import com.opentether.diagnostics.AndroidDiagnostics
+import com.opentether.diagnostics.AndroidDiagnosticsProvider
 import com.opentether.logging.AppLogEntry
 import com.opentether.logging.AppLogLevel
 import com.opentether.logging.AppLogger
@@ -51,6 +55,7 @@ data class OpenTetherUiState(
     val stats: VpnStats = VpnStats(),
     val runtime: TunnelRuntimeState = TunnelRuntimeState(),
     val settings: AppSettings = AppSettings(),
+    val androidDiagnostics: AndroidDiagnostics? = null,
     val throughputHistory: List<ThroughputSample> = emptyList(),
     val logs: List<AppLogEntry> = emptyList(),
     val nodes: List<NetworkNode> = emptyList(),
@@ -60,6 +65,7 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
     private val app = application.applicationContext
 
     private val throughputHistory = MutableStateFlow<List<ThroughputSample>>(emptyList())
+    private val diagnostics = MutableStateFlow<AndroidDiagnostics?>(null)
 
     val uiState: StateFlow<OpenTetherUiState> = combine(
         StatsHolder.stats,
@@ -67,11 +73,13 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
         AppPreferences.settings,
         AppLogger.logs,
         throughputHistory,
-    ) { stats, runtime, settings, logs, history ->
+        diagnostics,
+    ) { stats, runtime, settings, logs, history, androidDiagnostics ->
         OpenTetherUiState(
             stats = stats,
             runtime = runtime,
             settings = settings,
+            androidDiagnostics = androidDiagnostics,
             throughputHistory = history,
             logs = logs.filter { settings.showDebugLogs || it.level != AppLogLevel.DEBUG },
             nodes = buildNodes(stats, runtime, settings),
@@ -84,6 +92,7 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         AppPreferences.initialize(app)
+        refreshDiagnostics()
         viewModelScope.launch {
             StatsHolder.stats.collect { stats ->
                 throughputHistory.update { current ->
@@ -97,25 +106,58 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun refreshDiagnostics() {
+        val transport = AppPreferences.current(app).preferredTransport
+        diagnostics.value = AndroidDiagnosticsProvider.collect(app, transport)
+    }
+
+    fun openBatteryOptimizationSettings() {
+        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        app.startActivity(intent)
+    }
+
+    fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = android.net.Uri.parse("package:${app.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        app.startActivity(intent)
+    }
+
     fun startVpnService() {
         val transport = AppPreferences.current(app).preferredTransport
+        AppPreferences.setVpnRequested(app, true)
         TunnelRuntimeHolder.onServiceStarting(transport)
-        app.startService(Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START })
+        ContextCompat.startForegroundService(
+            app,
+            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START },
+        )
+        refreshDiagnostics()
     }
 
     fun stopVpnService() {
+        AppPreferences.setVpnRequested(app, false)
         TunnelRuntimeHolder.onServiceStopping()
-        app.startService(Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP })
+        ContextCompat.startForegroundService(
+            app,
+            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP },
+        )
+        refreshDiagnostics()
     }
 
     fun onVpnPermissionDenied() {
+        AppPreferences.setVpnRequested(app, false)
         TunnelRuntimeHolder.onPermissionDenied()
         AppLogger.w("OT/MainActivity", "VPN consent denied")
+        refreshDiagnostics()
     }
 
     fun updateTransport(transport: TunnelTransport) {
         AppPreferences.updateTransport(app, transport)
         AppLogger.i("OT/Settings", "Preferred transport set to ${transport.label}")
+        refreshDiagnostics()
     }
 
     fun updateAutoStartOnAccessory(enabled: Boolean) {
