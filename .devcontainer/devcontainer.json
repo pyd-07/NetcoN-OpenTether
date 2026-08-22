@@ -1,6 +1,9 @@
 {
   "name": "NetcoN OpenTether",
-  "image": "ghcr.io/cirruslabs/android-sdk:35",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "1.25"
