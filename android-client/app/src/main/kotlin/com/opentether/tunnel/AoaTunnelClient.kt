@@ -1,9 +1,14 @@
 package com.opentether.tunnel
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.net.VpnService
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import com.opentether.Constants
 import com.opentether.StatsHolder
@@ -20,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.DataInputStream
@@ -28,8 +34,11 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
 
 private const val TAG = "OT/AoaTunnelClient"
+private const val ACTION_USB_PERMISSION = "com.opentether.action.USB_PERMISSION"
 
 class AoaTunnelClient(
     private val outbound: Channel<ByteArray>,
@@ -91,7 +100,7 @@ class AoaTunnelClient(
     private suspend fun awaitAccessory(context: Context): ParcelFileDescriptor? {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
-        while (isActive) {
+        while (coroutineContext.isActive) {
             val accessory = usbManager.accessoryList?.firstOrNull()
             if (accessory == null) {
                 TunnelRuntimeHolder.onTransportWaiting(
@@ -138,6 +147,61 @@ class AoaTunnelClient(
                 "Unable to open USB accessory: ${e.message}",
             )
             null
+        }
+    }
+
+    private suspend fun requestUsbAccessoryPermission(
+        context: Context,
+        usbManager: UsbManager,
+        accessory: UsbAccessory,
+    ): Boolean {
+        if (usbManager.hasPermission(accessory)) return true
+
+        return suspendCancellableCoroutine { continuation ->
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(receiverContext: Context, intent: Intent) {
+                    if (intent.action != ACTION_USB_PERMISSION) return
+                    try { receiverContext.unregisterReceiver(this) } catch (_: Exception) {}
+                    val granted = intent.getBooleanExtra(
+                        UsbManager.EXTRA_PERMISSION_GRANTED,
+                        false,
+                    )
+                    AppLogger.i(TAG, "USB accessory permission result: granted=$granted")
+                    if (continuation.isActive) continuation.resume(granted)
+                }
+            }
+
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+            val permissionIntent = PendingIntent.getBroadcast(
+                context,
+                0,
+                Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
+                flags,
+            )
+
+            try {
+                usbManager.requestPermission(accessory, permissionIntent)
+            } catch (e: Exception) {
+                try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+                if (continuation.isActive) continuation.resume(false)
+                AppLogger.e(TAG, "requestPermission threw: ${e.message}")
+            }
+
+            continuation.invokeOnCancellation {
+                try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            }
         }
     }
 
