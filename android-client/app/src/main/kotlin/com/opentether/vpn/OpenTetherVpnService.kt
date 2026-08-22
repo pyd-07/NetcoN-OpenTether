@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.opentether.Constants
 import com.opentether.MainActivity
+import com.opentether.StatsHolder
 import com.opentether.data.AppPreferences
 import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger
