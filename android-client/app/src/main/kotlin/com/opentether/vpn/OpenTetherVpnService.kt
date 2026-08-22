@@ -12,22 +12,10 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.opentether.Constants
 import com.opentether.MainActivity
-import com.opentether.StatsHolder
 import com.opentether.data.AppPreferences
 import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger
 import com.opentether.runtime.TunnelRuntimeHolder
-import com.opentether.tunnel.AoaTunnelClient
-import com.opentether.tunnel.UsbTunnelClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import java.net.InetAddress
 
 private const val TAG = "OT/VpnService"
@@ -38,11 +26,7 @@ const val ACTION_STOP = "com.opentether.action.STOP"
 class OpenTetherVpnService : VpnService() {
 
     @Volatile private var vpnInterface: ParcelFileDescriptor? = null
-    private var serviceScope: CoroutineScope? = null
-    private var serviceJob: Job? = null
-    private var runtimeJob: Job? = null
-    private var outboundChannel: Channel<ByteArray>? = null
-    private var inboundChannel: Channel<ByteArray>? = null
+    private var tunnelSession: TunnelSession? = null
     private var stopping = false
 
     override fun onCreate() {
@@ -59,29 +43,11 @@ class OpenTetherVpnService : VpnService() {
             }
             ACTION_START -> {
                 AppLogger.i(TAG, "START received")
-                if (!promoteToForeground()) {
-                    AppLogger.e(TAG, "foreground startup failed")
-                    TunnelRuntimeHolder.onError(
-                        AppPreferences.current(this).preferredTransport,
-                        "Foreground service startup failed",
-                    )
-                    stopSelfResult(startId)
-                } else {
-                    startVpn()
-                }
+                startVpn(startId)
             }
             else -> {
                 AppLogger.i(TAG, "service recreated by system")
-                if (!promoteToForeground()) {
-                    AppLogger.e(TAG, "foreground startup failed after service recreation")
-                    TunnelRuntimeHolder.onError(
-                        AppPreferences.current(this).preferredTransport,
-                        "Foreground service startup failed after service recreation",
-                    )
-                    stopSelfResult(startId)
-                } else {
-                    startVpn()
-                }
+                startVpn(startId)
             }
         }
         return START_STICKY
@@ -102,9 +68,17 @@ class OpenTetherVpnService : VpnService() {
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
-    private fun startVpn() {
-        if (vpnInterface != null || serviceScope != null) {
+    private fun startVpn(startId: Int) {
+        if (vpnInterface != null || tunnelSession != null) {
             AppLogger.w(TAG, "VPN already active — ignoring duplicate START")
+            return
+        }
+
+        if (!promoteToForeground()) {
+            val transport = AppPreferences.current(this).preferredTransport
+            AppLogger.e(TAG, "foreground startup failed")
+            TunnelRuntimeHolder.onError(transport, "Foreground service startup failed")
+            stopSelfResult(startId)
             return
         }
 
@@ -115,39 +89,34 @@ class OpenTetherVpnService : VpnService() {
         val iface = buildVpnInterface() ?: run {
             AppLogger.e(TAG, "establish() returned null")
             TunnelRuntimeHolder.onError(transport, "Unable to create VPN interface")
-            stopSelf()
+            stopSelfResult(startId)
             return
         }
 
-        vpnInterface = iface
-        outboundChannel = Channel(Constants.OUTBOUND_CHANNEL_CAPACITY)
-        inboundChannel = Channel(Constants.INBOUND_CHANNEL_CAPACITY)
-        serviceJob = SupervisorJob()
-        serviceScope = CoroutineScope(Dispatchers.IO + serviceJob!!)
-
-        AppLogger.i(TAG, "TUN interface established (fd=${iface.fd})")
-        StatsHolder.setRunning(true)
-        TunnelRuntimeHolder.onTunEstablished()
-
-        val scope = serviceScope!!
-        val outbound = outboundChannel!!
-        val inbound = inboundChannel!!
-
-        TunReader(iface.fileDescriptor, outbound).start(scope)
-        TunWriter(iface.fileDescriptor, inbound).start(scope)
-        when (transport) {
-            TunnelTransport.ADB -> UsbTunnelClient(outbound, inbound, this).start(scope)
-            TunnelTransport.AOA -> AoaTunnelClient(outbound, inbound, this).start(scope)
-        }
-
-        runtimeJob = scope.launch(Dispatchers.IO) {
-            while (isActive) {
-                delay(1_000L)
-                StatsHolder.tick()
+        val session = TunnelSession(this, iface, transport)
+        try {
+            vpnInterface = iface
+            tunnelSession = session
+            session.start()
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "failed to start tunnel session: ${e.message}")
+            session.stop()
+            try {
+                iface.close()
+            } catch (_: Exception) {
+                // Best-effort cleanup after failed startup.
             }
+            tunnelSession = null
+            vpnInterface = null
+            StatsHolder.setRunning(false)
+            TunnelRuntimeHolder.onError(transport, "Unable to start tunnel session: ${e.message}")
+            stopSelfResult(startId)
+            return
         }
 
         AppLogger.i(TAG, "VPN running — connecting via ${transport.label}")
+        StatsHolder.setRunning(true)
+        TunnelRuntimeHolder.onTunEstablished()
     }
 
     private fun buildVpnInterface(): ParcelFileDescriptor? {
@@ -169,23 +138,15 @@ class OpenTetherVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        if (stopping && vpnInterface == null && serviceScope == null) return
+        if (stopping && vpnInterface == null && tunnelSession == null) return
         stopping = true
 
         AppLogger.i(TAG, "stopping")
         StatsHolder.setRunning(false)
         TunnelRuntimeHolder.onServiceStopping()
 
-        runtimeJob?.cancel()
-        runtimeJob = null
-        serviceScope?.cancel("VPN stopped")
-        serviceScope = null
-        serviceJob = null
-
-        outboundChannel?.close()
-        outboundChannel = null
-        inboundChannel?.close()
-        inboundChannel = null
+        tunnelSession?.stop()
+        tunnelSession = null
 
         try {
             vpnInterface?.close()
