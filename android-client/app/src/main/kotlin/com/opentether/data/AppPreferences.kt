@@ -31,6 +31,7 @@ data class AppSettings(
     val showDebugLogs: Boolean = false,
     val terminalEnabled: Boolean = true,
     val dnsServer: String = "8.8.8.8",
+    val vpnRequested: Boolean = false,
 )
 
 object AppPreferences {
@@ -40,6 +41,7 @@ object AppPreferences {
     private const val KEY_DEBUG_LOGS = "show_debug_logs"
     private const val KEY_TERMINAL = "terminal_enabled"
     private const val KEY_DNS_SERVER = "dns_server"
+    private const val KEY_VPN_REQUESTED = "vpn_requested"
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -90,6 +92,12 @@ object AppPreferences {
         publish(sharedPrefs)
     }
 
+    fun setVpnRequested(context: Context, requested: Boolean) {
+        val sharedPrefs = requirePrefs(context)
+        sharedPrefs.edit().putBoolean(KEY_VPN_REQUESTED, requested).apply()
+        publish(sharedPrefs)
+    }
+
     private fun requirePrefs(context: Context): SharedPreferences {
         initialize(context)
         return checkNotNull(prefs)
@@ -106,6 +114,7 @@ object AppPreferences {
             showDebugLogs = sharedPrefs.getBoolean(KEY_DEBUG_LOGS, false),
             terminalEnabled = sharedPrefs.getBoolean(KEY_TERMINAL, true),
             dnsServer = sharedPrefs.getString(KEY_DNS_SERVER, "8.8.8.8").orEmpty().ifBlank { "8.8.8.8" },
+            vpnRequested = sharedPrefs.getBoolean(KEY_VPN_REQUESTED, false),
         )
     }
 }

@@ -3,7 +3,6 @@ package com.opentether.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +35,7 @@ import com.opentether.OpenTetherViewModel
 import com.opentether.ui.components.StatusPill
 import com.opentether.ui.navigation.OpenTetherDestination
 import com.opentether.ui.screens.DashboardScreen
+import com.opentether.ui.screens.DiagnosticsScreen
 import com.opentether.ui.screens.LogsScreen
 import com.opentether.ui.screens.SettingsScreen
 import com.opentether.ui.screens.TunnelsScreen
@@ -166,6 +166,15 @@ fun OpenTetherApp(
                         TunnelsScreen(
                             uiState = uiState,
                             onTransportSelected = viewModel::updateTransport,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    composable(OpenTetherDestination.Diagnostics.route) {
+                        DiagnosticsScreen(
+                            diagnostics = uiState.androidDiagnostics,
+                            onRefresh = viewModel::refreshDiagnostics,
+                            onOpenBatterySettings = viewModel::openBatteryOptimizationSettings,
+                            onOpenAppSettings = viewModel::openAppSettings,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

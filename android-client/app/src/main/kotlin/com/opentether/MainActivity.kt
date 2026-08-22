@@ -45,6 +45,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Battery-optimization and system settings can change while the app is
+        // backgrounded, so refresh compatibility diagnostics whenever the UI returns.
+        viewModel.refreshDiagnostics()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

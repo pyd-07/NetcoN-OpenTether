@@ -5,11 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.opentether.Constants
 import com.opentether.MainActivity
 import com.opentether.StatsHolder
@@ -39,16 +41,23 @@ class OpenTetherVpnService : VpnService() {
         when (intent?.action) {
             ACTION_STOP -> {
                 AppLogger.i(TAG, "STOP received")
+                AppPreferences.setVpnRequested(this, false)
                 stopVpn()
                 stopSelfResult(startId)
             }
             ACTION_START -> {
                 AppLogger.i(TAG, "START received")
+                AppPreferences.setVpnRequested(this, true)
                 startVpn(startId)
             }
             else -> {
-                AppLogger.i(TAG, "service recreated by system")
-                startVpn(startId)
+                val shouldRestore = AppPreferences.current(this).vpnRequested
+                AppLogger.i(TAG, "service recreated by system; restore=$shouldRestore")
+                if (shouldRestore) {
+                    startVpn(startId)
+                } else {
+                    stopSelfResult(startId)
+                }
             }
         }
         return START_STICKY
@@ -56,9 +65,17 @@ class OpenTetherVpnService : VpnService() {
 
     override fun onRevoke() {
         AppLogger.i(TAG, "revoked by system")
+        AppPreferences.setVpnRequested(this, false)
         stopVpn()
         super.onRevoke()
         stopSelf()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Do not interpret the launcher task being swiped away as a request to
+        // stop the VPN. The foreground service owns the tunnel lifecycle.
+        AppLogger.i(TAG, "task removed; keeping VPN service alive")
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
@@ -75,8 +92,9 @@ class OpenTetherVpnService : VpnService() {
             return
         }
 
+        val transport = AppPreferences.current(this).preferredTransport
         if (!promoteToForeground()) {
-            val transport = AppPreferences.current(this).preferredTransport
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "foreground startup failed")
             TunnelRuntimeHolder.onError(transport, "Foreground service startup failed")
             stopSelfResult(startId)
@@ -84,10 +102,10 @@ class OpenTetherVpnService : VpnService() {
         }
 
         stopping = false
-        val transport = AppPreferences.current(this).preferredTransport
         TunnelRuntimeHolder.onServiceStarting(transport)
 
         val iface = buildVpnInterface() ?: run {
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "establish() returned null")
             TunnelRuntimeHolder.onError(transport, "Unable to create VPN interface")
             stopSelfResult(startId)
@@ -100,6 +118,7 @@ class OpenTetherVpnService : VpnService() {
             tunnelSession = session
             session.start()
         } catch (e: Exception) {
+            AppPreferences.setVpnRequested(this, false)
             AppLogger.e(TAG, "failed to start tunnel session: ${e.message}")
             session.stop()
             try {
@@ -199,17 +218,18 @@ class OpenTetherVpnService : VpnService() {
                 .build()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
+                ServiceCompat.startForeground(
+                    this,
                     Constants.NOTIFICATION_ID,
                     notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST,
                 )
             } else {
                 startForeground(Constants.NOTIFICATION_ID, notification)
             }
             true
         } catch (e: Exception) {
-            AppLogger.e(TAG, "startForeground failed: ${e.message}")
+            AppLogger.e(TAG, "startForeground failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
