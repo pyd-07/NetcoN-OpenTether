@@ -29,66 +29,37 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class ThroughputSample(
-    val downloadBytesPerSec: Long,
-    val uploadBytesPerSec: Long,
-    val timestampMs: Long,
-)
+data class ThroughputSample(val downloadBytesPerSec: Long, val uploadBytesPerSec: Long, val timestampMs: Long)
 
-enum class NodeStatus {
-    Active,
-    Warning,
-    Error,
-    Idle,
-}
+enum class NodeStatus { Active, Warning, Error, Idle }
 
-data class NetworkNode(
-    val id: String,
-    val title: String,
-    val address: String,
-    val subtitle: String,
-    val detail: String,
-    val status: NodeStatus,
-)
+data class NetworkNode(val id: String, val title: String, val address: String, val subtitle: String, val detail: String, val status: NodeStatus)
 
-data class OpenTetherUiState(
-    val stats: VpnStats = VpnStats(),
-    val runtime: TunnelRuntimeState = TunnelRuntimeState(),
-    val settings: AppSettings = AppSettings(),
-    val androidDiagnostics: AndroidDiagnostics? = null,
-    val throughputHistory: List<ThroughputSample> = emptyList(),
-    val logs: List<AppLogEntry> = emptyList(),
-    val nodes: List<NetworkNode> = emptyList(),
-)
+data class OpenTetherUiState(val stats: VpnStats = VpnStats(), val runtime: TunnelRuntimeState = TunnelRuntimeState(), val settings: AppSettings = AppSettings(), val androidDiagnostics: AndroidDiagnostics? = null, val throughputHistory: List<ThroughputSample> = emptyList(), val logs: List<AppLogEntry> = emptyList(), val nodes: List<NetworkNode> = emptyList())
 
 class OpenTetherViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application.applicationContext
-
     private val throughputHistory = MutableStateFlow<List<ThroughputSample>>(emptyList())
     private val diagnostics = MutableStateFlow<AndroidDiagnostics?>(null)
 
-    val uiState: StateFlow<OpenTetherUiState> = combine(
+    private val baseUiState: StateFlow<OpenTetherUiState> = combine(
         StatsHolder.stats,
         TunnelRuntimeHolder.state,
         AppPreferences.settings,
         AppLogger.logs,
-        throughputHistory,
-        diagnostics,
-    ) { stats, runtime, settings, logs, history, androidDiagnostics ->
+    ) { stats, runtime, settings, logs ->
         OpenTetherUiState(
             stats = stats,
             runtime = runtime,
             settings = settings,
-            androidDiagnostics = androidDiagnostics,
-            throughputHistory = history,
             logs = logs.filter { settings.showDebugLogs || it.level != AppLogLevel.DEBUG },
             nodes = buildNodes(stats, runtime, settings),
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = OpenTetherUiState(),
-    )
+    }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5_000L), initialValue = OpenTetherUiState())
+
+    val uiState: StateFlow<OpenTetherUiState> = combine(baseUiState, throughputHistory, diagnostics) { state, history, androidDiagnostics ->
+        state.copy(androidDiagnostics = androidDiagnostics, throughputHistory = history)
+    }.stateIn(scope = viewModelScope, started = SharingStarted.WhileSubscribed(5_000L), initialValue = OpenTetherUiState())
 
     init {
         AppPreferences.initialize(app)
@@ -96,210 +67,61 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             StatsHolder.stats.collect { stats ->
                 throughputHistory.update { current ->
-                    (current + ThroughputSample(
-                        downloadBytesPerSec = stats.downloadBytesPerSec,
-                        uploadBytesPerSec = stats.uploadBytesPerSec,
-                        timestampMs = System.currentTimeMillis(),
-                    )).takeLast(30)
+                    (current + ThroughputSample(stats.downloadBytesPerSec, stats.uploadBytesPerSec, System.currentTimeMillis())).takeLast(30)
                 }
             }
         }
     }
 
-    fun refreshDiagnostics() {
-        val transport = AppPreferences.current(app).preferredTransport
-        diagnostics.value = AndroidDiagnosticsProvider.collect(app, transport)
-    }
-
-    fun openBatteryOptimizationSettings() {
-        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        app.startActivity(intent)
-    }
-
-    fun openAppSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = android.net.Uri.parse("package:${app.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        app.startActivity(intent)
-    }
+    fun refreshDiagnostics() { val transport = AppPreferences.current(app).preferredTransport; diagnostics.value = AndroidDiagnosticsProvider.collect(app, transport) }
+    fun openBatteryOptimizationSettings() { app.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) }
+    fun openAppSettings() { app.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = android.net.Uri.parse("package:${app.packageName}"); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) }
 
     fun startVpnService() {
         val transport = AppPreferences.current(app).preferredTransport
         AppPreferences.setVpnRequested(app, true)
         TunnelRuntimeHolder.onServiceStarting(transport)
-        ContextCompat.startForegroundService(
-            app,
-            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START },
-        )
+        ContextCompat.startForegroundService(app, Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START })
         refreshDiagnostics()
     }
-
-    fun stopVpnService() {
-        AppPreferences.setVpnRequested(app, false)
-        TunnelRuntimeHolder.onServiceStopping()
-        app.startService(Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP })
-        refreshDiagnostics()
-    }
-
-    fun onVpnPermissionDenied() {
-        AppPreferences.setVpnRequested(app, false)
-        TunnelRuntimeHolder.onPermissionDenied()
-        AppLogger.w("OT/MainActivity", "VPN consent denied")
-        refreshDiagnostics()
-    }
-
-    fun updateTransport(transport: TunnelTransport) {
-        AppPreferences.updateTransport(app, transport)
-        AppLogger.i("OT/Settings", "Preferred transport set to ${transport.label}")
-        refreshDiagnostics()
-    }
-
-    fun updateAutoStartOnAccessory(enabled: Boolean) {
-        AppPreferences.updateAutoStartOnAccessory(app, enabled)
-        AppLogger.i("OT/Settings", "Auto-start on accessory ${if (enabled) "enabled" else "disabled"}")
-    }
-
-    fun updateShowDebugLogs(enabled: Boolean) {
-        AppPreferences.updateShowDebugLogs(app, enabled)
-        AppLogger.i("OT/Settings", "Debug log visibility ${if (enabled) "enabled" else "disabled"}")
-    }
-
-    fun updateTerminalEnabled(enabled: Boolean) {
-        AppPreferences.updateTerminalEnabled(app, enabled)
-        AppLogger.i("OT/Settings", "Terminal ${if (enabled) "enabled" else "disabled"}")
-    }
-
-    fun updateDnsServer(dnsServer: String) {
-        AppPreferences.updateDnsServer(app, dnsServer)
-        AppLogger.i("OT/Settings", "DNS server set to ${dnsServer.trim().ifBlank { Constants.VPN_DNS_SERVER }}")
-    }
-
-    fun clearLogs() {
-        AppLogger.clear()
-        AppLogger.i("OT/Logs", "In-app logs cleared")
-    }
+    fun stopVpnService() { AppPreferences.setVpnRequested(app, false); TunnelRuntimeHolder.onServiceStopping(); app.startService(Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP }); refreshDiagnostics() }
+    fun onVpnPermissionDenied() { AppPreferences.setVpnRequested(app, false); TunnelRuntimeHolder.onPermissionDenied(); AppLogger.w("OT/MainActivity", "VPN consent denied"); refreshDiagnostics() }
+    fun updateTransport(transport: TunnelTransport) { AppPreferences.updateTransport(app, transport); AppLogger.i("OT/Settings", "Preferred transport set to ${transport.label}"); refreshDiagnostics() }
+    fun updateAutoStartOnAccessory(enabled: Boolean) { AppPreferences.updateAutoStartOnAccessory(app, enabled); AppLogger.i("OT/Settings", "Auto-start on accessory ${if (enabled) "enabled" else "disabled"}") }
+    fun updateShowDebugLogs(enabled: Boolean) { AppPreferences.updateShowDebugLogs(app, enabled); AppLogger.i("OT/Settings", "Debug log visibility ${if (enabled) "enabled" else "disabled"}") }
+    fun updateTerminalEnabled(enabled: Boolean) { AppPreferences.updateTerminalEnabled(app, enabled); AppLogger.i("OT/Settings", "Terminal ${if (enabled) "enabled" else "disabled"}") }
+    fun updateDnsServer(dnsServer: String) { AppPreferences.updateDnsServer(app, dnsServer); AppLogger.i("OT/Settings", "DNS server set to ${dnsServer.trim().ifBlank { Constants.VPN_DNS_SERVER }}") }
+    fun clearLogs() { AppLogger.clear(); AppLogger.i("OT/Logs", "In-app logs cleared") }
 
     fun submitCommand(command: String) {
         val normalized = command.trim()
         if (normalized.isBlank()) return
-
         when (normalized.lowercase()) {
-            "status" -> {
-                val runtime = uiState.value.runtime
-                AppLogger.i(
-                    "OT/Terminal",
-                    "status=${runtime.statusLabel.lowercase()} transport=${runtime.transport.name} detail=${runtime.detail}",
-                )
-            }
+            "status" -> { val runtime = uiState.value.runtime; AppLogger.i("OT/Terminal", "status=${runtime.statusLabel.lowercase()} transport=${runtime.transport.name} detail=${runtime.detail}") }
             "clear" -> clearLogs()
-            "start" -> {
-                if (VpnService.prepare(app) == null) {
-                    startVpnService()
-                } else {
-                    AppLogger.w("OT/Terminal", "VPN consent is still required; use the main action button first")
-                }
-            }
+            "start" -> if (VpnService.prepare(app) == null) startVpnService() else AppLogger.w("OT/Terminal", "VPN consent is still required; use the main action button first")
             "stop" -> stopVpnService()
-            "help" -> {
-                AppLogger.i("OT/Terminal", "commands: status, start, stop, clear, help")
-            }
-            else -> {
-                AppLogger.w("OT/Terminal", "unknown command: $normalized")
-            }
+            "help" -> AppLogger.i("OT/Terminal", "commands: status, start, stop, clear, help")
+            else -> AppLogger.w("OT/Terminal", "unknown command: $normalized")
         }
     }
 
     fun findNode(nodeId: String): NetworkNode? = uiState.value.nodes.firstOrNull { it.id == nodeId }
 
-    private fun buildNodes(
-        stats: VpnStats,
-        runtime: TunnelRuntimeState,
-        settings: AppSettings,
-    ): List<NetworkNode> {
+    private fun buildNodes(stats: VpnStats, runtime: TunnelRuntimeState, settings: AppSettings): List<NetworkNode> {
         val dnsServer = settings.dnsServer.ifBlank { Constants.VPN_DNS_SERVER }
-        val relayAddress = when (runtime.transport) {
-            TunnelTransport.ADB -> "${Constants.RELAY_HOST}:${Constants.RELAY_PORT}"
-            TunnelTransport.AOA -> "USB accessory"
-        }
-
-        val runtimeStatus = when (runtime.phase) {
-            TunnelPhase.Connected -> NodeStatus.Active
-            TunnelPhase.Error -> NodeStatus.Error
-            TunnelPhase.Starting, TunnelPhase.Connecting, TunnelPhase.AwaitingTransport, TunnelPhase.Stopping -> NodeStatus.Warning
-            TunnelPhase.Idle -> NodeStatus.Idle
-        }
-
+        val relayAddress = when (runtime.transport) { TunnelTransport.ADB -> "${Constants.RELAY_HOST}:${Constants.RELAY_PORT}"; TunnelTransport.AOA -> "USB accessory" }
+        val runtimeStatus = when (runtime.phase) { TunnelPhase.Connected -> NodeStatus.Active; TunnelPhase.Error -> NodeStatus.Error; TunnelPhase.Starting, TunnelPhase.Connecting, TunnelPhase.AwaitingTransport, TunnelPhase.Stopping -> NodeStatus.Warning; TunnelPhase.Idle -> NodeStatus.Idle }
         return buildList {
-            add(
-                NetworkNode(
-                    id = "device",
-                    title = "Android Device",
-                    address = Constants.VPN_CLIENT_IP,
-                    subtitle = if (runtime.isRunning) "VPN interface active" else "VPN offline",
-                    detail = "Client TUN address ${Constants.VPN_CLIENT_IP}/${Constants.VPN_PREFIX}",
-                    status = if (runtime.isRunning) NodeStatus.Active else NodeStatus.Idle,
-                ),
-            )
-            add(
-                NetworkNode(
-                    id = "relay",
-                    title = runtime.transport.label,
-                    address = relayAddress,
-                    subtitle = runtime.statusLabel,
-                    detail = "Preferred ${settings.preferredTransport.label} • ${runtime.detail}",
-                    status = runtimeStatus,
-                ),
-            )
-            add(
-                NetworkNode(
-                    id = "dns",
-                    title = "DNS Resolver",
-                    address = dnsServer,
-                    subtitle = "Configured by VPN",
-                    detail = "All device DNS traffic is routed through the tunnel when active",
-                    status = if (runtime.isRunning) NodeStatus.Active else NodeStatus.Idle,
-                ),
-            )
-
-            stats.connections.take(12).forEach { connection ->
-                add(
-                    NetworkNode(
-                        id = "peer-${connection.host.sanitizeNodeId()}",
-                        title = connection.host,
-                        address = connection.host,
-                        subtitle = if (connection.active) "Observed peer" else "Recent peer",
-                        detail = "↓ ${formatRate(connection.downloadBytesPerSec)}  ↑ ${formatRate(connection.uploadBytesPerSec)}",
-                        status = if (connection.active) NodeStatus.Active else NodeStatus.Idle,
-                    ),
-                )
-            }
+            add(NetworkNode("device", "Android Device", Constants.VPN_CLIENT_IP, if (runtime.isRunning) "VPN interface active" else "VPN offline", "Client TUN address ${Constants.VPN_CLIENT_IP}/${Constants.VPN_PREFIX}", if (runtime.isRunning) NodeStatus.Active else NodeStatus.Idle))
+            add(NetworkNode("relay", runtime.transport.label, relayAddress, runtime.statusLabel, "Preferred ${settings.preferredTransport.label} • ${runtime.detail}", runtimeStatus))
+            add(NetworkNode("dns", "DNS Resolver", dnsServer, "Configured by VPN", "All device DNS traffic is routed through the tunnel when active", if (runtime.isRunning) NodeStatus.Active else NodeStatus.Idle))
+            stats.connections.take(12).forEach { connection -> add(NetworkNode("peer-${connection.host.sanitizeNodeId()}", connection.host, connection.host, if (connection.active) "Observed peer" else "Recent peer", "↓ ${formatRate(connection.downloadBytesPerSec)}  ↑ ${formatRate(connection.uploadBytesPerSec)}", if (connection.active) NodeStatus.Active else NodeStatus.Idle)) }
         }
     }
 }
 
-fun formatBytes(bytes: Long): String = when {
-    bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000f)
-    bytes >= 1_000_000L -> "%.1f MB".format(bytes / 1_000_000f)
-    bytes >= 1_000L -> "%.1f KB".format(bytes / 1_000f)
-    else -> "$bytes B"
-}
-
+fun formatBytes(bytes: Long): String = when { bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000f); bytes >= 1_000_000L -> "%.1f MB".format(bytes / 1_000_000f); bytes >= 1_000L -> "%.1f KB".format(bytes / 1_000f); else -> "$bytes B" }
 fun formatRate(bytesPerSec: Long): String = "${formatBytes(bytesPerSec)}/s"
-
-fun formatDuration(durationMs: Long?): String {
-    val safeDuration = durationMs ?: return "00:00:00"
-    val totalSeconds = (safeDuration / 1_000L).coerceAtLeast(0L)
-    val hours = totalSeconds / 3_600L
-    val minutes = (totalSeconds % 3_600L) / 60L
-    val seconds = totalSeconds % 60L
-    return "%02d:%02d:%02d".format(hours, minutes, seconds)
-}
-
-private fun String.sanitizeNodeId(): String = buildString(length) {
-    for (char in this@sanitizeNodeId) {
-        append(if (char.isLetterOrDigit()) char else '_')
-    }
-}
+fun formatDuration(durationMs: Long?): String { val safeDuration = durationMs ?: return "00:00:00"; val totalSeconds = (safeDuration / 1_000L).coerceAtLeast(0L); val hours = totalSeconds / 3_600L; val minutes = (totalSeconds % 3_600L) / 60L; val seconds = totalSeconds % 60L; return "%02d:%02d:%02d".format(hours, minutes, seconds) }
+private fun String.sanitizeNodeId(): String = buildString(length) { for (char in this@sanitizeNodeId) append(if (char.isLetterOrDigit()) char else '_') }
