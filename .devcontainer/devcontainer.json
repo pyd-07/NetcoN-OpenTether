@@ -1,0 +1,22 @@
+{
+  "name": "NetcoN OpenTether",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.25"
+    }
+  },
+  "postCreateCommand": "make doctor",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "fwcd.kotlin",
+        "vscjava.vscode-java-pack"
+      ]
+    }
+  }
+}

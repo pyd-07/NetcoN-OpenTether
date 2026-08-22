@@ -19,7 +19,7 @@ If you have a Linux PC with an internet connection and you want your Android pho
 This path requires you to enable "USB Debugging" on your phone, which is a standard developer setting.
 
 1. **Enable USB Debugging:** On your phone, go to Settings → Developer Options and turn on USB Debugging.
-2. **Connect your phone:** Plug your phone into your Linux PC using the USB cable. Tap "Allow" if a prompt appears on your phone screen asking to allow USB debugging.
+2. **Connect your phone:** Plug your phone into your Linux PC using a USB cable. Tap "Allow" if a prompt appears on your phone screen asking to allow USB debugging.
 3. **Run the setup script:** Open a terminal on your Linux PC and enter:
    ```bash
    git clone https://github.com/pyd-07/NetcoN-OpenTether.git
@@ -94,6 +94,32 @@ In earlier versions, AOA mode suffered intermittent protocol desynchronization p
 *   **The Fix:**
     - The sender was rewritten to use atomic, unbuffered writes. Now exactly **1 OTP Frame = 1 USB Bulk Transfer**.
     - The receiver was wrapped in a 64KB `BufferedInputStream`. This pulls the maximal allowable USB bulk transfer into userspace memory in a single syscall, guaranteeing no bytes are dropped by the kernel before decoding the frames.
+
+### Development Environment
+
+For a reproducible local environment, open the repository in GitHub Codespaces or VS Code with the Dev Container extension. The repository's `.devcontainer/` setup provides Go 1.25, the Android SDK/JDK environment, `libusb`, `shellcheck`, and `make`.
+
+After the container is created, start with:
+
+```bash
+make doctor
+make test
+```
+
+Common development commands:
+
+```bash
+make fmt             # Format Go source
+make test            # Go race tests + Android unit tests
+make lint            # Android lint
+make build           # Go build + Android debug APK
+make build-aoa       # Build the AOA-enabled Go relay
+make shellcheck      # Check shell scripts
+make check           # Local CI-equivalent checks
+make clean           # Remove generated build artifacts
+```
+
+The development container is intended for builds, tests, linting, and code changes. USB-device testing still requires a host environment with access to the physical Android device.
 
 ### Build Instructions
 #### Android App
