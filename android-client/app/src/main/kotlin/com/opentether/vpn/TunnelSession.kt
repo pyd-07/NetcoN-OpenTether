@@ -1,6 +1,6 @@
 package com.opentether.vpn
 
-import android.content.Context
+import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import com.opentether.Constants
 import com.opentether.StatsHolder
@@ -22,7 +22,7 @@ private const val TAG = "OT/TunnelSession"
 
 /** Owns all resources associated with one VPN tunnel run. */
 class TunnelSession(
-    private val context: Context,
+    private val vpnService: VpnService,
     private val vpnInterface: ParcelFileDescriptor,
     private val transport: TunnelTransport,
 ) {
@@ -47,10 +47,11 @@ class TunnelSession(
         TunReader(vpnInterface.fileDescriptor, outboundChannel).start(sessionScope)
         TunWriter(vpnInterface.fileDescriptor, inboundChannel).start(sessionScope)
         when (transport) {
-            TunnelTransport.ADB -> UsbTunnelClient(outboundChannel, inboundChannel, context).start(sessionScope)
-            TunnelTransport.AOA -> AoaTunnelClient(outboundChannel, inboundChannel, context).start(sessionScope)
+            TunnelTransport.ADB -> UsbTunnelClient(outboundChannel, inboundChannel, vpnService).start(sessionScope)
+            TunnelTransport.AOA -> AoaTunnelClient(outboundChannel, inboundChannel, vpnService).start(sessionScope)
         }
 
+        StatsHolder.setRunning(true)
         runtimeJob = sessionScope.launch {
             while (isActive) {
                 delay(1_000L)
@@ -66,6 +67,7 @@ class TunnelSession(
         stopped = true
 
         AppLogger.i(TAG, "stopping session (${transport.label})")
+        StatsHolder.setRunning(false)
         runtimeJob?.cancel()
         runtimeJob = null
         scope?.cancel("Tunnel session stopped")
