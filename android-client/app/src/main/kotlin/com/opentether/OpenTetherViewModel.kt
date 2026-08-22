@@ -140,10 +140,7 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
     fun stopVpnService() {
         AppPreferences.setVpnRequested(app, false)
         TunnelRuntimeHolder.onServiceStopping()
-        ContextCompat.startForegroundService(
-            app,
-            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP },
-        )
+        app.startService(Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP })
         refreshDiagnostics()
     }
 
