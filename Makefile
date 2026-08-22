@@ -1,4 +1,4 @@
-.PHONY: help doctor fmt test test-go test-android lint build build-go build-aoa build-android shellcheck check clean
+.PHONY: help doctor fmt fmt-check test test-go test-android lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
 ANDROID_DIR := android-client
@@ -8,6 +8,7 @@ help:
 	@echo "NetcoN OpenTether development targets:"
 	@echo "  make doctor          Check local development prerequisites"
 	@echo "  make fmt             Format Go source files"
+	@echo "  make fmt-check       Verify Go formatting without changing files"
 	@echo "  make test            Run Go and Android tests"
 	@echo "  make test-go         Run Go tests with the race detector"
 	@echo "  make test-android    Run Android unit tests"
@@ -34,6 +35,20 @@ doctor:
 
 fmt:
 	$(GO) fmt ./...
+
+fmt-check:
+	@set -eu; \
+	files="$$(find . -type f -name '*.go' -not -path './.git/*' -print)"; \
+	if [ -z "$$files" ]; then \
+		echo "No Go files found; formatting check passed."; \
+	else \
+		formatted="$$(gofmt -l $$files)"; \
+		if [ -n "$$formatted" ]; then \
+			echo "The following Go files are not gofmt-formatted:"; \
+			printf '%s\\n' "$$formatted"; \
+			exit 1; \
+		fi; \
+	fi
 
 test: test-go test-android
 
@@ -66,7 +81,7 @@ shellcheck:
 		shellcheck $$scripts; \
 	fi
 
-check: fmt test lint build-aoa shellcheck
+check: fmt-check test lint build-aoa shellcheck
 
 clean:
 	$(GO) clean -cache -testcache
