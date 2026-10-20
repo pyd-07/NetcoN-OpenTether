@@ -5,7 +5,7 @@
 
 Reverse USB tethering for Android: route your Android device's traffic through a Linux PC's Internet connection over USB, without root on the phone.
 
-> **Current release:** `v0.9.5-beta.1` — Android compatibility preview. Real-device validation is still in progress. ADB is the recommended beta test path; AOA remains experimental while its release transport selection is being validated.
+> **Release status:** OpenTether is in the `v0.9.5` beta series. Use [GitHub Releases](https://github.com/pyd-07/NetcoN-OpenTether/releases) for the latest published prerelease and its matching assets. The project is still undergoing real-device validation. ADB is the recommended test path; AOA remains experimental.
 
 ---
 
@@ -16,99 +16,104 @@ Reverse USB tethering for Android: route your Android device's traffic through a
 - Android 8.0+ (API 26+)
 - A USB data cable
 - A Linux PC with Internet access
-- `adb` for ADB transport, or USB/libusb access for AOA
+- ADB for the recommended transport, or USB/libusb access for experimental AOA
 - `iptables`, `ip6tables`, and `iproute2` on the Linux PC
 
-### Install the beta
+### Install a beta release
 
-The beta release automatically publishes an Android APK and Linux relay executables on GitHub Releases.
+The release workflow publishes an Android APK, Linux relay executables, and SHA-256 checksums.
 
-Open the latest prerelease:
+Open [GitHub Releases](https://github.com/pyd-07/NetcoN-OpenTether/releases) and download all required assets from the **same release tag**. Asset names follow this pattern:
 
-<https://github.com/pyd-07/NetcoN-OpenTether/releases>
+- `OpenTether-<tag>-android.apk`
+- `OpenTether-<tag>-linux-amd64`
+- `OpenTether-<tag>-linux-arm64`
+- `OpenTether-<tag>-linux-amd64-aoa`
+- `OpenTether-<tag>-SHA256SUMS.txt`
 
-Release assets include:
-
-- `OpenTether-v0.9.5-beta.1-android.apk`
-- `OpenTether-v0.9.5-beta.1-linux-amd64`
-- `OpenTether-v0.9.5-beta.1-linux-arm64`
-- `OpenTether-v0.9.5-beta.1-linux-amd64-aoa`
-- `OpenTether-v0.9.5-beta.1-SHA256SUMS.txt`
-
-No binaries are committed to the repository; GitHub Actions builds and attaches them to releases.
+The release workflow currently builds a **debug APK** intended for beta testing, not a production-signed Android application. No generated binaries are committed to the repository; GitHub Actions builds and attaches release assets.
 
 ### ADB mode — recommended
 
-ADB is the simplest way to validate the beta.
-
 1. Enable **USB debugging** in Android Developer options.
-2. Connect the phone by USB.
-3. Confirm the Linux PC sees the device:
+2. Connect the phone by USB and authorize the host fingerprint.
+3. Confirm the ADB client used for testing can see the device:
 
-```bash
-adb devices
-```
+   ```bash
+   adb devices
+   ```
 
-The device should appear as `device`, not `unauthorized`.
+   The device should appear as `device`, not `unauthorized` or `offline`.
 
-Install the APK from the release asset or a local build:
+4. Install the APK downloaded from that same release:
 
-```bash
-adb install -r /path/to/OpenTether-v0.9.5-beta.1-android.apk
-```
+   ```bash
+   adb install -r /path/to/OpenTether-<tag>-android.apk
+   ```
 
-The relay normally configures `adb reverse tcp:8765 tcp:8765` itself. If you run
-it with `--no-adb-watch`, configure the reverse mapping in the user ADB context
-and verify it:
+5. Start the matching Linux relay as root:
+
+   ```bash
+   sudo ./OpenTether-<tag>-linux-amd64
+   ```
+
+6. Open OpenTether on Android, grant VPN permission if prompted, and tap **Connect** on Home.
+7. Verify actual connectivity through the Linux host. A successful build, a visible ADB device, or a reverse mapping alone does not prove that Internet traffic works.
+
+The relay normally configures `adb reverse tcp:8765 tcp:8765` automatically. If you use `--no-adb-watch`, configure and verify the mapping in the same ADB context that owns the device:
 
 ```bash
 adb reverse tcp:8765 tcp:8765
 adb reverse --list
 ```
 
-4. Start the relay as root:
+Keep the relay terminal open while the tunnel is active. The relay requires privileges to create the TUN interface and configure host routing/NAT. Review the networking and cleanup cautions in [the ADB integration validation guide](docs/adb-integration.md) before running a privileged relay.
+
+The Android UI is organized around **Home** and **Docs**. Home presents the connection state and primary action. Docs contains setup, connection lifecycle, troubleshooting, technical reference, privacy, and developer notes. Transport, accessory auto-start, and DNS override options are available under **Connection settings**.
+
+The [ADB integration validation guide](docs/adb-integration.md) describes the staged procedure, expected observations, fault isolation, and evidence sanitization. It clearly distinguishes automated checks from physical-device validation.
+
+### Windows + WSL2 ADB configuration
+
+In WSL2, the Linux ADB server may not see a phone connected to Windows. If Windows `adb.exe` can see the device but Linux `adb devices` is empty, configure the relay watcher to use the Windows ADB executable and the server port that owns the device.
+
+Example (replace the path with the actual location on your machine):
 
 ```bash
-sudo ./OpenTether-v0.9.5-beta.1-linux-amd64
+sudo ./relay-bin \
+  --adb-bin "/mnt/c/Users/<user>/.../platform-tools/adb.exe" \
+  --adb-port 5038
 ```
 
-5. Open OpenTether on Android.
-6. Grant the Android VPN permission.
-7. Tap **Connect** on the Home screen.
-8. Verify that Internet traffic works through the PC.
+- `--adb-bin` selects the ADB executable used by automatic reverse setup. The default is `adb` from `PATH`.
+- `--adb-port` selects the ADB server port. The default `0` preserves the ADB client's default-port behavior; set a nonzero value such as `5038` when that is the server that sees your phone.
 
-Keep the relay terminal open while the tunnel is active. The relay needs permission to create the TUN interface and configure routing/NAT.
+Use a real executable path for your Windows installation. Do not copy the illustrative path literally. Check device visibility first with the same executable and port:
 
-The app has two primary screens. **Home** shows the real connection state and the single relevant action; **Docs** contains setup, lifecycle, troubleshooting, technical reference, privacy, and developer notes. Connection method, accessory auto-start, and DNS override are available from **Connection settings** at the bottom of Home.
+```bash
+"/path/to/adb.exe" -P 5038 devices
+"/path/to/adb.exe" -P 5038 reverse --list
+```
 
-For the full staged procedure, expected log observations, fault isolation, and
-sanitized evidence bundle, see
-[`docs/adb-integration.md`](docs/adb-integration.md). That guide contains manual,
-privileged, and physical-device steps; it is not an automated test. A separate
-manual ADB run on 2026-10-20 documented the reverse/control path, VPN/TUN data
-path, and cleanup, while deliberate traffic and recovery stages remain
-outstanding.
+An empty device list on one ADB server does not mean the phone is disconnected from every ADB server. Always inspect the server that owns the device transport.
 
 ### AOA mode — experimental
 
-AOA (Android Open Accessory) is intended to provide direct USB transport without requiring persistent USB debugging. The current beta AOA release path is still being validated, so prefer ADB for baseline testing.
+AOA (Android Open Accessory) is intended to provide direct USB transport without persistent USB debugging. Its release path and physical-device behavior are still being validated, so use ADB for baseline testing.
 
-A true AOA session should involve Android USB accessory negotiation and the OpenTether accessory permission flow. A release binary that starts an ADB watcher instead is not using the intended AOA transport.
-
-For a source build, AOA mode must be selected explicitly; the `-tags aoa` build alone does not enable it:
+For a source build, AOA mode must be explicitly selected; building with `-tags aoa` alone does not turn it on:
 
 ```bash
 sudo ./relay-bin --aoa
 ```
 
-> **Accessory-version compatibility:** the current relay sends accessory version
-> `1`, matching the current `usb_accessory_filter.xml`. APKs built before the
-> filter changed from `1.0` to `1` will not match. Rebuild the APK; one relay
-> cannot satisfy both version strings.
+AOA requires USB access and libusb development files (for Debian/Ubuntu, `libusb-1.0-0-dev`). A true AOA session should perform Android USB accessory negotiation and use the OpenTether accessory permission flow. Treat a binary that starts an ADB watcher as not using the intended AOA transport.
+
+> **Accessory-version compatibility:** the relay currently sends accessory version `1`, matching the current `usb_accessory_filter.xml`. APKs built against the older `1.0` filter will not match; rebuild the APK so the version strings agree.
 
 ### Linux setup script
 
-For a source checkout, the repository still provides the setup helper:
+For a source checkout:
 
 ```bash
 git clone https://github.com/pyd-07/NetcoN-OpenTether.git
@@ -116,156 +121,57 @@ cd NetcoN-OpenTether
 sudo ./setup.sh
 ```
 
-AOA setup:
+For the AOA setup path:
 
 ```bash
 sudo ./setup.sh --aoa
 ```
 
-The setup script installs required host dependencies, builds the relay and Android app, and can configure a complete local installation. For beta testing, the prebuilt release assets are usually simpler.
+The setup script installs host dependencies and builds/configures a local installation. It may change host configuration; review it and its cleanup behavior before running it. Prebuilt release assets are usually simpler for beta testing.
+
+> **Networking caution:** the relay runs with elevated privileges, creates a TUN interface, and configures routes and NAT/firewall rules. Use it only on a host you are authorized to reconfigure, keep the listener loopback-only, and follow the documented cleanup audit after testing.
 
 ---
 
-## WSL2 testing
+## Current beta status
 
-WSL2 can run the Linux relay, but USB devices are not automatically exposed to the Linux environment.
+The `v0.9.5` beta series combines relay hardening, Android lifecycle/session-startup improvements, and a connection-first UI.
 
-On Windows, install [`usbipd-win`](https://github.com/dorssel/usbipd-win), then inspect connected devices:
+### Recent changes
 
-```powershell
-usbipd list
-```
+- **Relay validation and transport safety:** validate tunnel/listener configuration before changing host networking, detect short writes across transport and buffered paths, tighten session cancellation/cleanup, and improve AOA string/filter compatibility.
+- **ADB/session startup:** distinguish fatal startup errors from runtime reconnect errors, extract deterministic device-state parsing and bounded reverse-setup backoff, and expand relay and Android lifecycle tests.
+- **Connection-first Android UI:** reduce the main navigation to Home and Docs, show explicit connection states and the relevant primary action, add connection settings and troubleshooting guidance, and remove obsolete screens/components.
+- **Configurable ADB for WSL:** add `--adb-bin` and `--adb-port` so automatic reverse mapping can target a non-default ADB server, with diagnostics for repeated empty device discovery and focused watcher/configuration tests.
 
-Find the Android device and attach it to WSL:
-
-```powershell
-usbipd bind --busid <BUSID>
-usbipd attach --wsl --busid <BUSID>
-```
-
-Then in WSL:
-
-```bash
-lsusb
-adb devices
-```
-
-For ADB testing, Android USB debugging must also be enabled and authorized on the phone.
-
-For AOA testing, WSL needs direct USB access because the relay communicates with the USB device rather than only through `adbd`.
-
-> A GitHub Codespace is a separate remote machine. It is useful for builds, CI reproduction, and development, but it is not a substitute for a local WSL/Linux host when testing a physical Android USB device.
-
-### Common WSL relay errors
-
-**`TUNSETIFF ioctl: operation not permitted`**
-
-Run the relay with the privileges required to create/configure the TUN device:
-
-```bash
-sudo ./OpenTether-v0.9.5-beta.1-linux-amd64
-```
-
-**`iptables: executable file not found in $PATH`**
-
-Install the host dependency:
-
-```bash
-sudo apt update
-sudo apt install -y iptables iproute2
-```
-
----
-
-## v0.9.5 beta status
-
-`v0.9.5` is being developed as an Android compatibility release in three phases.
-
-### Phase 1 — Fixed
-
-- VPN service behavior after screen lock.
-- VPN service behavior after process recreation.
-- Foreground-service startup failures.
-- VPN shutdown after system service recreation.
-- USB permission handling across Android versions.
-- AOA permission handling on newer Android releases.
-- Activity/service lifecycle race conditions.
-
-### Phase 2 — Added
-
-- Android API-level compatibility handling.
-- Android lifecycle-aware VPN management.
-- Better foreground-service handling.
-- Device information detection.
-- Battery optimization diagnostics.
-- Android-specific troubleshooting information.
-- On-device diagnostics and compatibility checks in the app's Documentation screen.
-
-### Phase 3 — Improved
-
-Planned reliability and usability improvements build on the fixed and added compatibility work before the stable `v0.9.5` release.
-
-### Beta testing focus
-
-For `v0.9.5-beta.1`, please prioritize:
-
-- Android 8/9 compatibility.
-- Android 10/11 compatibility.
-- Android 12/13 behavior.
-- Android 14+ foreground-service behavior.
-- Screen lock → unlock.
-- Service/process recreation.
-- USB disconnect → reconnect.
-- ADB permission handling.
-- Battery optimization behavior.
-- OEM-specific background restrictions.
+These are implementation changes, not a claim that every device, host, or transport combination has passed physical validation.
 
 ### Validation status
 
-Automated checks cover the Go relay's configuration validation, short-write
-handling, session cancellation, protocol framing boundaries, AOA string/filter
-parity, the matching Kotlin protocol codec, deterministic Android-to-TUN and
-TUN-to-Android session paths, ADB device-state parsing/backoff, and the Android
-startup-error lifecycle state. The current local remediation was verified with:
+The repository includes automated Go tests, race-enabled tests, vet/lint checks, deterministic relay session tests, Android unit tests, and release CI. The ADB integration guide includes the current staged commands and the limits of each validation layer.
 
-```bash
-go test -race -count=1 -timeout=120s ./...
-go vet ./...
-make fmt-check
-make test-integration
-make shellcheck
-bash -n setup.sh
-( cd android-client && ./gradlew testDebugUnitTest --no-daemon )
-git diff --check
-```
+Automated and mock integration tests do **not** open a real TUN device, configure host routing/NAT, perform USB accessory negotiation, or prove end-to-end Internet connectivity. Passing them does not establish that the VPN works on every Android device.
 
-The session tests use pipes and a TUN write seam; they do not open `/dev/net/tun`,
-invoke `adb`, or send traffic. They are mock integration tests, not real-device
-validation.
+A manual ADB run on 2026-10-20 established the reverse/control path, the app-owned relay session, PING/PONG, the VPN/TUN data path, and cleanup that restored the host networking baseline. Traffic was observed after the VPN had been started manually. That run did not complete the full validation matrix.
 
-Standard relay compilation is verified. AOA compilation requires
-`libusb-1.0-0-dev` and is not verified in every development environment.
+Still outstanding or requiring additional device/host coverage:
 
-A manual ADB device run on 2026-10-20 established the reverse transport, the
-app-owned relay control session, PING/PONG, the VPN/TUN data path, and cleanup
-that restored the host networking baseline. Real background traffic was observed
-after the VPN was started manually; that traffic is expected during an active
-tunnel. Still outstanding: AOA accessory negotiation and permission prompts,
-real USB bulk transfer behavior, deliberate IPv4/DNS/HTTPS and large-transfer
-traffic, IPv6 forwarding, reconnect behavior, and full end-to-end connectivity
-validation on physical Android devices. ADB remains the recommended path while
-those checks are completed. See
-[`docs/adb-integration.md`](docs/adb-integration.md) for the staged procedure.
+- Deliberate IPv4, DNS, HTTPS, and large-transfer tests
+- IPv6 forwarding and upstream compatibility
+- Disconnect/reconnect and relay-restart recovery under test
+- Broad Android-version and OEM coverage
+- AOA accessory negotiation, permission prompts, and real USB bulk transfers
+- Full end-to-end connectivity validation across supported Linux hosts
+
+ADB remains the recommended baseline until the outstanding cases have been verified. See [`docs/adb-integration.md`](docs/adb-integration.md) for the staged procedure and evidence requirements.
 
 ---
 
 ## Developer workflow
 
-### GitHub Codespaces / Dev Container
+### Codespaces / dev container
 
-The repository includes a development container for reproducible builds and checks. It provides the Android SDK environment together with Go, `make`, `shellcheck`, and libusb development dependencies.
-
-Start with:
+The repository includes a development container with the tools needed for reproducible builds and checks. Begin with:
 
 ```bash
 make doctor
@@ -288,11 +194,11 @@ make check
 make clean
 ```
 
-`make check` is intended to approximate the repository's local validation. GitHub Actions remains the authoritative CI environment.
+`make check` is intended to approximate local validation. GitHub Actions is the authoritative CI environment.
 
 ### Build from source
 
-Android:
+Android debug APK:
 
 ```bash
 cd android-client
@@ -305,31 +211,30 @@ Standard relay:
 go build -o relay-bin .
 ```
 
-AOA-enabled relay:
+AOA-enabled relay (requires libusb development files):
 
 ```bash
-sudo apt install libusb-1.0-0-dev
 go build -tags aoa -o relay-bin .
 ```
 
 ### Release artifacts
 
-Version tags such as `v0.9.5-beta.1` trigger the release workflow. The workflow builds:
+Pushing a version tag matching `v*` triggers the release workflow. For example, tags such as `v0.9.5-beta.3` cause the workflow to:
 
-- Android debug APK
-- Linux amd64 relay
-- Linux arm64 relay
-- Linux amd64 AOA relay
-- SHA-256 checksums
+1. Run Go tests and build the standard and AOA relay variants.
+2. Build the Android debug APK.
+3. Build Linux amd64 and arm64 relay executables.
+4. Generate SHA-256 checksums.
+5. Create a GitHub Release with generated release notes.
 
-The release workflow creates a prerelease automatically for alpha, beta, and release-candidate tags.
+Tags containing `-alpha`, `-beta`, or `-rc` are marked as prereleases. Check the published release page for the latest tag and its actual assets; do not assume a version number from this README is the newest published one.
 
 ---
 
 ## Architecture
 
 ```text
-Android App
+Android app
     │
     ▼
 VpnService / TUN
@@ -338,36 +243,32 @@ VpnService / TUN
     │                                  │
     └── AOA transport ── USB ──────────┤
                                        ▼
-                                  Go relay
+                                    Go relay
                                        │
-                                  Host TUN ot0
+                                    Host TUN
                                        │
-                              iptables / ip6tables NAT
+                              IPv4/IPv6 forwarding + NAT
                                        │
                                     Internet
 ```
 
-The Android side captures packets with `VpnService`. The Linux relay terminates the transport, forwards packets through a host TUN interface, and applies IPv4/IPv6 forwarding and NAT rules.
-
-The relay also owns transport detection, reconnect behavior, connection state, and cleanup. Recent stability work added bounded reconnect behavior and explicit lifecycle states so transport failures can recover without requiring a full application restart.
+The Android side captures packets with `VpnService`. The Linux relay terminates the selected transport, forwards packets through a host TUN interface, and applies host forwarding/NAT rules.
 
 ### ADB transport
 
-ADB mode uses `adb reverse` to expose the relay service through the authorized Android debugging channel.
+ADB mode uses `adb reverse` to expose the relay service through the authorized Android debugging channel. The watcher supports explicit ADB executable and server-port configuration. Defaults preserve standard `adb` behavior; in WSL, select the Windows ADB executable and the server port that actually sees the phone.
 
 ### AOA transport
 
-AOA is designed around Android Open Accessory USB bulk transfers. The Android side uses USB accessory permissions and the Linux relay uses libusb/gousb to communicate with the accessory.
+AOA is designed around Android Open Accessory USB bulk transfers. The Android side uses USB accessory permissions and the Linux relay uses libusb/gousb. This path remains experimental and requires physical-device testing.
 
-The AOA path has previously required strict framing discipline: one OTP frame per USB bulk transfer on the sender side and buffered reads on the Android receiver to avoid losing unread transfer data.
+### OpenTether Protocol (OTP)
 
-### OTP protocol
-
-Every packet is wrapped in the OpenTether Protocol (OTP). The fixed header is 12 bytes, big-endian:
+Packets are wrapped in OTP with a 12-byte, big-endian header:
 
 ```text
  0       4       8  9  10      12
- |conn_id|pay_len|ty|fl|reservd|...payload...
+ |conn_id|pay_len|ty|fl|reserved|...payload...
 ```
 
 - `conn_id`: logical connection identifier
@@ -378,31 +279,13 @@ Every packet is wrapped in the OpenTether Protocol (OTP). The fixed header is 12
 
 ### Tunnel configuration constraints
 
-The relay validates its configuration before creating a TUN device or changing
-host networking:
+The relay validates its configuration before creating a TUN device or changing host networking:
 
-- `--listen` must be an explicit loopback IP literal (`127.0.0.1:8765` or
-  `[::1]:8765`) in ADB/TCP mode. Empty listeners, wildcard addresses,
-  hostnames, LAN addresses, and port 0 are rejected. AOA mode does not create a
-  TCP listener, so the listener may be empty there.
-- `--tun-prefix` must be `/24` through `/30`. The stock Android client uses
-  `10.0.0.1/24`; the relay default is `10.0.0.2/24`.
-- `--mtu` must be `1280` through `1400`. The lower bound is the IPv6 minimum
-  link MTU (the client routes IPv6); the upper bound matches the stock client's
-  fixed 1400-byte VPN MTU.
-- `--tun-addr` and `--android-ip` must be distinct IPv4 addresses in the same
-  tunnel subnet and must not be the subnet's network or broadcast address.
-  Unspecified, loopback, multicast, link-local, broadcast, IPv6, and IPv4-mapped
-  addresses are rejected.
-
-The stock Android client is not runtime-configurable: it connects to
-`127.0.0.1:8765`, assigns itself `10.0.0.1/24`, and uses a 1400-byte MTU. The
-relay defaults (`127.0.0.1:8765`, `--android-ip 10.0.0.1`,
-`--tun-addr 10.0.0.2`, `--tun-prefix 24`, `--mtu 1400`) match those values.
-Changing the listener host/port, `--android-ip`, or the tunnel subnet requires a
-matching Android client build; if you change the listener port, the
-`adb reverse` target must use that port too. `127.0.0.1:8765` is the reliable
-stock-ADB path; other loopback literals are accepted for custom setups.
+- In ADB/TCP mode, `--listen` must be an explicit loopback IP literal (normally `127.0.0.1:8765` or `[::1]:8765`). Wildcard/LAN addresses, hostnames, and port `0` are rejected. AOA does not create a TCP listener.
+- `--tun-prefix` must be `/24` through `/30`.
+- `--mtu` must be `1280` through `1400`.
+- `--tun-addr` and `--android-ip` must be distinct usable IPv4 addresses in the same tunnel subnet.
+- The stock Android client uses `127.0.0.1:8765`, `10.0.0.1/24`, and MTU `1400`. Changing those values requires a matching client configuration/build; a custom listener port also requires a matching reverse target.
 
 ---
 
@@ -410,49 +293,30 @@ stock-ADB path; other loopback literals are accepted for custom setups.
 
 | Symptom | Check |
 |---|---|
-| `adb devices` is empty | Confirm USB debugging, Windows/WSL USB access, and that the phone is attached to the WSL environment. |
-| Device is `unauthorized` | Unlock the phone and accept the USB debugging authorization prompt. |
-| `TUNSETIFF ioctl: operation not permitted` | Run the relay with `sudo`. |
-| `iptables` or `ip6tables` not found | Install `iptables` and `iproute2`; the relay configures both IPv4 and IPv6 NAT. |
-| `adb reverse --list` does not show `tcp:8765` | Verify the reverse mapping in the same ADB context as the authorized device, or run the relay with `--no-adb-watch` and configure it manually. |
-| Relay is ready but no Android session connects | Check that the app is running, the VPN permission was granted, and `adb reverse` points at the relay listener; inspect both relay and `OT/UsbTunnelClient` logs. |
-| VPN stops after screen lock | Check battery optimization and OEM background restrictions in **Docs → Your device**. |
-| VPN starts but traffic does not flow | Test an IPv4 literal first, then a hostname to separate tunnel/route/NAT failures from DNS failures; inspect relay and app logs for session errors. |
-| IPv4 works but IPv6 fails | Treat IPv6 as a separate result; check `ip6tables`, host IPv6 forwarding/upstream support, and the `ot0` address. |
-| AOA binary starts an ADB watcher | Treat the AOA release path as experimental; use ADB for baseline beta validation and report the relay output. |
+| Linux `adb devices` is empty under WSL | Check whether Windows `adb.exe` sees the phone on a different ADB server. Configure `--adb-bin` and `--adb-port` for that server. |
+| Device is `unauthorized` | Unlock the phone and accept the USB debugging prompt. |
+| `adb reverse --list` lacks `tcp:8765` | Inspect the same ADB executable/server that owns the device and check the relay watcher logs. If using `--no-adb-watch`, create the mapping manually in the authorized ADB context. |
+| `TUNSETIFF ioctl: operation not permitted` | Run the relay with the privileges required for TUN setup. |
+| `iptables` or `ip6tables` is missing | Install the host networking dependencies, including `iptables` and `iproute2`. |
+| Relay is ready but no Android session connects | Check that the app is running, VPN permission was granted, and the reverse mapping targets the relay listener. |
+| VPN stops after screen lock | Check Android battery optimization and OEM background restrictions. |
+| VPN starts but traffic does not flow | Test an IPv4 address before a hostname to help separate routing/NAT problems from DNS failures. |
+| IPv4 works but IPv6 fails | Validate IPv6 forwarding, host/upstream support, `ip6tables`, and the TUN address separately. |
+| AOA fails or starts the wrong transport | Use ADB for baseline beta testing and gather logs before reporting an AOA issue. |
 
-For bug reports, include Android version/API, device model, transport mode, relay output, and relevant `adb logcat` output when available.
+For bug reports, include the Android version/API level, device model, transport mode, relay output, and relevant filtered `adb logcat` output. Sanitize device serials, IDs, public IPs, and other sensitive identifiers before sharing logs.
 
 ---
 
 ## Project roadmap
 
-See [`ROADMAP.md`](ROADMAP.md) for the current release plan.
-
-The near-term sequence is:
-
-```text
-v0.9.4 Stability
-      ↓
-v0.9.5 Android Compatibility
-      ├── Fixed
-      ├── Added
-      └── Improved
-      ↓
-v0.9.6 Network Reliability
-      ↓
-v0.9.7 Linux Compatibility
-      ↓
-v0.9.8 Diagnostics + Security
-      ↓
-v1.0.0-beta.1
-```
+See [`ROADMAP.md`](ROADMAP.md) for the detailed plan. The current direction is network reliability (`v0.9.6`), broader Linux compatibility (`v0.9.7`), diagnostics/security (`v0.9.8`), followed by the `v1.0.0` beta and stable release. Roadmap items are planned work, not claims of completed validation.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep changes focused and easy to review. Large behavioral changes should be split into separate modules or pull requests where practical.
+Issues and pull requests are welcome. Keep changes focused and easy to review. Separate major behavioral changes where practical, and distinguish unit-test evidence from physical-device results.
 
 ---
 
