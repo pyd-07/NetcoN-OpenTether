@@ -1,18 +1,16 @@
 package com.opentether.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.PlayCircle
-import androidx.compose.material.icons.outlined.StopCircle
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -21,25 +19,24 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
 import com.opentether.OpenTetherViewModel
-import com.opentether.ui.components.StatusPill
-import com.opentether.ui.navigation.OpenTetherDestination
-import com.opentether.ui.screens.DashboardScreen
-import com.opentether.ui.screens.DiagnosticsScreen
-import com.opentether.ui.screens.LogsScreen
-import com.opentether.ui.screens.SettingsScreen
-import com.opentether.ui.screens.TunnelsScreen
-import com.opentether.ui.theme.OtBackground
+import com.opentether.ui.components.ConnectionDetailsDialog
+import com.opentether.ui.components.ConnectionSettingsDialog
+import com.opentether.ui.screens.DocsScreen
+import com.opentether.ui.screens.HomeScreen
+
+enum class OpenTetherSection(val label: String) {
+    Home("Home"),
+    Docs("Docs"),
+}
 
 @Composable
 fun OpenTetherApp(
@@ -47,159 +44,120 @@ fun OpenTetherApp(
     onRequestStartVpnPermission: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val navController = rememberNavController()
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route ?: OpenTetherDestination.Dashboard.route
-    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
-    val useRail = screenWidthDp >= 840
-    val compactTopBar = screenWidthDp < 420
-    val topLevelDestinations = OpenTetherDestination.topLevel()
+    var section by rememberSaveable { mutableStateOf(OpenTetherSection.Home) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = OtBackground,
-        topBar = {
+    BackHandler(enabled = section == OpenTetherSection.Docs) {
+        section = OpenTetherSection.Home
+    }
+
+    LaunchedEffect(section) {
+        if (section == OpenTetherSection.Docs) {
+            viewModel.refreshDiagnostics()
+        }
+    }
+    LaunchedEffect(showDetails) {
+        if (showDetails) {
+            viewModel.refreshDiagnostics()
+        }
+    }
+
+    BoxWithConstraints {
+        val useRail = maxWidth >= 720.dp
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                if (!useRail) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                        OpenTetherSection.entries.forEach { tab ->
+                            NavigationBarItem(
+                                selected = section == tab,
+                                onClick = { section = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon(),
+                                        contentDescription = null,
+                                    )
+                                },
+                                label = { Text(tab.label) },
+                            )
+                        }
+                    }
+                }
+            },
+        ) { innerPadding ->
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = "OpenTether",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    StatusPill(
-                        text = uiState.runtime.statusLabel,
-                        phase = uiState.runtime.phase,
-                        compact = compactTopBar,
-                    )
-                    if (uiState.runtime.isRunning) {
-                        IconButton(onClick = { viewModel.stopVpnService() }) {
-                            Icon(Icons.Outlined.StopCircle, contentDescription = "Stop VPN")
-                        }
-                    } else {
-                        IconButton(onClick = onRequestStartVpnPermission) {
-                            Icon(Icons.Outlined.PlayCircle, contentDescription = "Start VPN")
-                        }
-                    }
-                }
-            }
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-                thickness = 1.dp,
-            )
-        },
-        bottomBar = {
-            if (!useRail) {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    topLevelDestinations.forEach { destination ->
-                        val selected = currentRoute == destination.route
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                navController.navigate(destination.route) {
-                                    launchSingleTop = true
-                                    popUpTo(OpenTetherDestination.Dashboard.route) {
-                                        saveState = true
-                                    }
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(destination.icon, contentDescription = destination.label) },
-                            label = { Text(destination.label) },
-                        )
-                    }
-                }
-            }
-        },
-    ) { innerPadding ->
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            if (useRail) {
-                NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
-                    topLevelDestinations.forEach { destination ->
-                        val selected = currentRoute == destination.route
-                        NavigationRailItem(
-                            selected = selected,
-                            onClick = {
-                                navController.navigate(destination.route) {
-                                    launchSingleTop = true
-                                }
-                            },
-                            icon = { Icon(destination.icon, contentDescription = destination.label) },
-                            label = { Text(destination.label) },
-                        )
-                    }
-                }
-            }
-
-            Box(
-                modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(innerPadding),
             ) {
-                NavHost(
-                    navController = navController,
-                    startDestination = OpenTetherDestination.Dashboard.route,
-                ) {
-                    composable(OpenTetherDestination.Dashboard.route) {
-                        DashboardScreen(
-                            uiState = uiState,
-                            onStartRequested = onRequestStartVpnPermission,
-                            onStopRequested = { viewModel.stopVpnService() },
-                            onOpenLogs = { navController.navigate(OpenTetherDestination.Logs.route) },
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                if (useRail) {
+                    NavigationRail(
+                        modifier = Modifier.fillMaxHeight(),
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ) {
+                        OpenTetherSection.entries.forEach { tab ->
+                            NavigationRailItem(
+                                selected = section == tab,
+                                onClick = { section = tab },
+                                icon = {
+                                    Icon(
+                                        imageVector = tab.icon(),
+                                        contentDescription = null,
+                                    )
+                                },
+                                label = { Text(tab.label) },
+                            )
+                        }
                     }
-                    composable(OpenTetherDestination.Tunnels.route) {
-                        TunnelsScreen(
-                            uiState = uiState,
-                            onTransportSelected = viewModel::updateTransport,
-                            modifier = Modifier.fillMaxSize(),
+                }
+
+                Box(modifier = Modifier.weight(1f)) {
+                    when (section) {
+                        OpenTetherSection.Home -> HomeScreen(
+                            runtime = uiState.runtime,
+                            onConnect = onRequestStartVpnPermission,
+                            onDisconnect = viewModel::stopVpnService,
+                            onOpenDetails = { showDetails = true },
+                            onOpenSettings = { showSettings = true },
                         )
-                    }
-                    composable(OpenTetherDestination.Diagnostics.route) {
-                        DiagnosticsScreen(
-                            diagnostics = uiState.androidDiagnostics,
-                            onRefresh = viewModel::refreshDiagnostics,
-                            onOpenBatterySettings = viewModel::openBatteryOptimizationSettings,
+
+                        OpenTetherSection.Docs -> DocsScreen(
+                            diagnostics = uiState.diagnostics,
+                            onRefreshDiagnostics = viewModel::refreshDiagnostics,
                             onOpenAppSettings = viewModel::openAppSettings,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                    composable(OpenTetherDestination.Logs.route) {
-                        LogsScreen(
-                            logs = uiState.logs,
-                            terminalEnabled = uiState.settings.terminalEnabled,
-                            showTechnicalDetails = uiState.settings.showDebugLogs,
-                            onClearLogs = viewModel::clearLogs,
-                            onSubmitCommand = viewModel::submitCommand,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                    composable(OpenTetherDestination.Settings.route) {
-                        SettingsScreen(
-                            settings = uiState.settings,
-                            onAutoStartChanged = viewModel::updateAutoStartOnAccessory,
-                            onShowDebugLogsChanged = viewModel::updateShowDebugLogs,
-                            onTerminalEnabledChanged = viewModel::updateTerminalEnabled,
-                            onDnsServerChanged = viewModel::updateDnsServer,
-                            modifier = Modifier.fillMaxSize(),
+                            onOpenBatterySettings = viewModel::openBatteryOptimizationSettings,
                         )
                     }
                 }
             }
         }
     }
+
+    if (showDetails) {
+        ConnectionDetailsDialog(
+            runtime = uiState.runtime,
+            diagnostics = uiState.diagnostics,
+            appVersion = uiState.appVersion,
+            onRefresh = viewModel::refreshDiagnostics,
+            onDismiss = { showDetails = false },
+        )
+    }
+
+    if (showSettings) {
+        ConnectionSettingsDialog(
+            settings = uiState.settings,
+            isRunning = uiState.runtime.isRunning,
+            onTransportChanged = viewModel::updateTransport,
+            onAutoStartChanged = viewModel::updateAutoStartOnAccessory,
+            onDnsServerChanged = viewModel::updateDnsServer,
+            onDismiss = { showSettings = false },
+        )
+    }
+}
+
+private fun OpenTetherSection.icon() = when (this) {
+    OpenTetherSection.Home -> Icons.Default.Home
+    OpenTetherSection.Docs -> Icons.Default.Info
 }

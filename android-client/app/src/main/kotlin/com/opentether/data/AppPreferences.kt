@@ -11,12 +11,12 @@ enum class TunnelTransport(
     val description: String,
 ) {
     ADB(
-        label = "ADB Reverse",
-        description = "TCP tunnel over adb reverse to the relay on your workstation",
+        label = "ADB reverse",
+        description = "TCP tunnel through adb reverse. Recommended for most setups.",
     ),
     AOA(
-        label = "USB Accessory",
-        description = "Direct Android Open Accessory link with no USB debugging required",
+        label = "USB accessory",
+        description = "Direct Android Open Accessory link. Experimental; no USB debugging required.",
     ),
     ;
 
@@ -28,8 +28,6 @@ enum class TunnelTransport(
 data class AppSettings(
     val preferredTransport: TunnelTransport = TunnelTransport.ADB,
     val autoStartOnAccessory: Boolean = false,
-    val showDebugLogs: Boolean = false,
-    val terminalEnabled: Boolean = true,
     val dnsServer: String = "8.8.8.8",
     val vpnRequested: Boolean = false,
 )
@@ -38,8 +36,6 @@ object AppPreferences {
     private const val PREFS_NAME = "opentether_settings"
     private const val KEY_TRANSPORT = "transport"
     private const val KEY_AUTO_START = "auto_start_on_accessory"
-    private const val KEY_DEBUG_LOGS = "show_debug_logs"
-    private const val KEY_TERMINAL = "terminal_enabled"
     private const val KEY_DNS_SERVER = "dns_server"
     private const val KEY_VPN_REQUESTED = "vpn_requested"
 
@@ -74,18 +70,6 @@ object AppPreferences {
         publish(sharedPrefs)
     }
 
-    fun updateShowDebugLogs(context: Context, enabled: Boolean) {
-        val sharedPrefs = requirePrefs(context)
-        sharedPrefs.edit().putBoolean(KEY_DEBUG_LOGS, enabled).apply()
-        publish(sharedPrefs)
-    }
-
-    fun updateTerminalEnabled(context: Context, enabled: Boolean) {
-        val sharedPrefs = requirePrefs(context)
-        sharedPrefs.edit().putBoolean(KEY_TERMINAL, enabled).apply()
-        publish(sharedPrefs)
-    }
-
     fun updateDnsServer(context: Context, dnsServer: String) {
         val sharedPrefs = requirePrefs(context)
         sharedPrefs.edit().putString(KEY_DNS_SERVER, dnsServer.trim()).apply()
@@ -111,8 +95,6 @@ object AppPreferences {
         return AppSettings(
             preferredTransport = TunnelTransport.fromStored(sharedPrefs.getString(KEY_TRANSPORT, TunnelTransport.ADB.name)),
             autoStartOnAccessory = sharedPrefs.getBoolean(KEY_AUTO_START, false),
-            showDebugLogs = sharedPrefs.getBoolean(KEY_DEBUG_LOGS, false),
-            terminalEnabled = sharedPrefs.getBoolean(KEY_TERMINAL, true),
             dnsServer = sharedPrefs.getString(KEY_DNS_SERVER, "8.8.8.8").orEmpty().ifBlank { "8.8.8.8" },
             vpnRequested = sharedPrefs.getBoolean(KEY_VPN_REQUESTED, false),
         )

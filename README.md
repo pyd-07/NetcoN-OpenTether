@@ -74,10 +74,12 @@ sudo ./OpenTether-v0.9.5-beta.1-linux-amd64
 
 5. Open OpenTether on Android.
 6. Grant the Android VPN permission.
-7. Tap **Start VPN**.
+7. Tap **Connect** on the Home screen.
 8. Verify that Internet traffic works through the PC.
 
 Keep the relay terminal open while the tunnel is active. The relay needs permission to create the TUN interface and configure routing/NAT.
+
+The app has two primary screens. **Home** shows the real connection state and the single relevant action; **Docs** contains setup, lifecycle, troubleshooting, technical reference, privacy, and developer notes. Connection method, accessory auto-start, and DNS override are available from **Connection settings** at the bottom of Home.
 
 For the full staged procedure, expected log observations, fault isolation, and
 sanitized evidence bundle, see
@@ -197,7 +199,7 @@ sudo apt install -y iptables iproute2
 - Device information detection.
 - Battery optimization diagnostics.
 - Android-specific troubleshooting information.
-- Diagnostics UI and compatibility checks.
+- On-device diagnostics and compatibility checks in the app's Documentation screen.
 
 ### Phase 3 — Improved
 
@@ -414,7 +416,7 @@ stock-ADB path; other loopback literals are accepted for custom setups.
 | `iptables` or `ip6tables` not found | Install `iptables` and `iproute2`; the relay configures both IPv4 and IPv6 NAT. |
 | `adb reverse --list` does not show `tcp:8765` | Verify the reverse mapping in the same ADB context as the authorized device, or run the relay with `--no-adb-watch` and configure it manually. |
 | Relay is ready but no Android session connects | Check that the app is running, the VPN permission was granted, and `adb reverse` points at the relay listener; inspect both relay and `OT/UsbTunnelClient` logs. |
-| VPN stops after screen lock | Check battery optimization and OEM background restrictions in the Diagnostics screen. |
+| VPN stops after screen lock | Check battery optimization and OEM background restrictions in **Docs → Your device**. |
 | VPN starts but traffic does not flow | Test an IPv4 literal first, then a hostname to separate tunnel/route/NAT failures from DNS failures; inspect relay and app logs for session errors. |
 | IPv4 works but IPv6 fails | Treat IPv6 as a separate result; check `ip6tables`, host IPv6 forwarding/upstream support, and the `ot0` address. |
 | AOA binary starts an ADB watcher | Treat the AOA release path as experimental; use ADB for baseline beta validation and report the relay output. |

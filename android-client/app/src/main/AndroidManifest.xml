@@ -23,7 +23,9 @@
 
     <application
         android:allowBackup="false"
-        android:label="OpenTether"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.OpenTether">
 
         <!-- ── Main activity ──────────────────────────────────────────── -->
@@ -39,8 +41,8 @@
               AOA: when the PC relay connects via USB and Android recognises
               the accessory strings, the system sends this intent to the app.
               Declaring it on MainActivity means the app opens (or is brought
-              to the foreground) automatically — the user just sees the UI
-              and can tap "Start VPN".
+              to the foreground) automatically. The user still decides whether
+              to connect from the Home screen.
 
               The usb_accessory_filter.xml lists the manufacturer/model/version
               strings that must match those sent by the relay.

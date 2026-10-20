@@ -163,7 +163,7 @@ address for this test.
 
 ## 7. Stage 4 — Android VPN lifecycle
 
-Open the app and tap **Start VPN**. Grant the VPN consent dialog if prompted.
+Open the app and tap **Connect** on Home. Grant the VPN consent dialog if prompted. Use **Docs** for the in-app troubleshooting checklist and **Connection settings** for the transport, accessory auto-start, and DNS override.
 
 Useful log filters:
 

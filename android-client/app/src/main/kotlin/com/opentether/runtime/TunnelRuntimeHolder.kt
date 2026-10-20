@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.asStateFlow
 
 enum class TunnelPhase {
     Idle,
+    AwaitingPermission,
+    PermissionDenied,
     Starting,
     AwaitingTransport,
     Connecting,
@@ -31,12 +33,23 @@ object TunnelRuntimeHolder {
     private val _state = MutableStateFlow(TunnelRuntimeState())
     val state: StateFlow<TunnelRuntimeState> = _state.asStateFlow()
 
+    fun onPermissionRequested(transport: TunnelTransport) {
+        _state.value = TunnelRuntimeState(
+            phase = TunnelPhase.AwaitingPermission,
+            transport = transport,
+            isRunning = false,
+            statusLabel = "Permission needed",
+            detail = "Waiting for Android VPN permission",
+            relayEndpoint = relayEndpointFor(transport),
+        )
+    }
+
     fun onPermissionDenied() {
         _state.value = _state.value.copy(
-            phase = TunnelPhase.Idle,
+            phase = TunnelPhase.PermissionDenied,
             isRunning = false,
-            statusLabel = "Permission denied",
-            detail = "VPN consent was not granted",
+            statusLabel = "Permission needed",
+            detail = "VPN permission was not granted",
             sessionStartedAtMs = null,
             lastError = null,
         )

@@ -48,6 +48,16 @@ class TunnelRuntimeHolderTest {
     }
 
     @Test
+    fun permissionRequestShowsWaitingStateWithoutStartingVpn() {
+        TunnelRuntimeHolder.onPermissionRequested(TunnelTransport.ADB)
+
+        val state = TunnelRuntimeHolder.state.value
+        assertEquals(TunnelPhase.AwaitingPermission, state.phase)
+        assertFalse(state.isRunning)
+        assertNull(state.lastError)
+    }
+
+    @Test
     fun permissionDenialClearsRunningStateAndError() {
         TunnelRuntimeHolder.onServiceStarting(TunnelTransport.ADB)
         TunnelRuntimeHolder.onStartupError(TunnelTransport.ADB, "old failure")
@@ -55,7 +65,7 @@ class TunnelRuntimeHolderTest {
         TunnelRuntimeHolder.onPermissionDenied()
 
         val state = TunnelRuntimeHolder.state.value
-        assertEquals(TunnelPhase.Idle, state.phase)
+        assertEquals(TunnelPhase.PermissionDenied, state.phase)
         assertFalse(state.isRunning)
         assertNull(state.lastError)
     }

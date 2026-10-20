@@ -1,27 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    app_name  — required by AndroidManifest.xml android:label
-    All other strings — referenced by activity_main.xml views.
-    This layout is the legacy XML UI; it coexists with the Compose UI
-    and must compile even though it is no longer the primary interface.
--->
 <resources>
     <string name="app_name">OpenTether</string>
-
-    <!-- activity_main.xml: status row -->
-    <string name="status_idle">Idle</string>
-    <string name="status_connected">Connected via USB</string>
-
-    <!-- activity_main.xml: stat card labels -->
-    <string name="label_download">Download</string>
-    <string name="label_upload">Upload</string>
-    <string name="label_throughput">Throughput — last 30 s</string>
-    <string name="label_total_down">Total ↓</string>
-    <string name="label_total_up">Total ↑</string>
-    <string name="label_rtt">RTT</string>
-    <string name="label_active_connections">Active connections</string>
-
-    <!-- activity_main.xml: buttons -->
-    <string name="action_start">Start VPN</string>
-    <string name="action_stop">Stop VPN</string>
 </resources>
