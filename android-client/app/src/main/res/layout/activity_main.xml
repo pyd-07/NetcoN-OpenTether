@@ -373,7 +373,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="4dp"
-                    android:text="1. Connect your phone over USB and enable USB debugging.\n2. On the PC run: sudo ./relay &amp;&amp; adb reverse tcp:8765 tcp:8765\n3. Tap Start VPN below and accept the system dialog."
+                    android:text="1. Connect your phone over USB and enable USB debugging.\n2. On the PC run: sudo ./relay-bin &amp;&amp; adb reverse tcp:8765 tcp:8765\n3. Tap Start VPN below and accept the system dialog."
                     android:textColor="@color/textSecondary"
                     android:textSize="13sp" />
             </LinearLayout>

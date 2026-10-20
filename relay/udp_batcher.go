@@ -57,8 +57,18 @@ func NewDirectWriter(conn net.Conn) *DirectWriter {
 func (d *DirectWriter) Send(f Frame) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_, err := d.conn.Write(BuildFrame(f))
-	return err
+
+	buf := BuildFrame(f)
+	n, err := d.conn.Write(buf)
+	if err != nil {
+		return err
+	}
+	if n != len(buf) {
+		// A short USB bulk write desynchronises the OTP stream: Android would
+		// interpret the next frame header as payload. Fail the session instead.
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 // Close is a no-op for DirectWriter (no background goroutine to stop).
@@ -89,22 +99,27 @@ type FlushWriter struct {
 	bw             *bufio.Writer
 	largeThreshold int
 	cancel         context.CancelFunc
+	onError        func(error)
 }
 
 // NewFlushWriter creates a FlushWriter and starts the background ticker.
-// Call Close() when done to stop the ticker goroutine.
+// Call Close() when done to stop the ticker goroutine. onError, when non-nil,
+// is invoked if a background flush fails; the session uses it to cancel itself
+// because a short write leaves the frame stream corrupted.
 func NewFlushWriter(
 	ctx context.Context,
 	w io.Writer,
 	bufSize int,
 	largeThreshold int,
 	interval time.Duration,
+	onError func(error),
 ) *FlushWriter {
 	fctx, cancel := context.WithCancel(ctx)
 	fw := &FlushWriter{
 		bw:             bufio.NewWriterSize(w, bufSize),
 		largeThreshold: largeThreshold,
 		cancel:         cancel,
+		onError:        onError,
 	}
 	go fw.tickerLoop(fctx, interval)
 	return fw
@@ -147,11 +162,16 @@ func (fw *FlushWriter) tickerLoop(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			fw.mu.Lock()
-			if err := fw.bw.Flush(); err != nil {
-				// Log write failures so USB/TCP errors are visible in -v output.
-				debugf("FlushWriter: flush error: %v", err)
-			}
+			err := fw.bw.Flush()
 			fw.mu.Unlock()
+			if err != nil {
+				if fw.onError != nil {
+					fw.onError(err)
+				} else {
+					// Log write failures so USB/TCP errors are visible in -v output.
+					debugf("FlushWriter: flush error: %v", err)
+				}
+			}
 		}
 	}
 }

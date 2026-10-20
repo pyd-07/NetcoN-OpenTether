@@ -17,24 +17,24 @@ func main() {
 		TunAddr:         "10.0.0.2",
 		TunPrefix:       24,
 		AndroidIP:       "10.0.0.1",
-		MTU:             1500,
+		MTU:             1400,
 		DisableAdbWatch: false,
 	}
 
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr,
-		"TCP address to listen on (must be 127.0.0.1:PORT)")
+		"Loopback TCP address to listen on (stock Android client uses 127.0.0.1:8765; other loopback literals require a matching client/reverse setup)")
 	flag.StringVar(&cfg.TunName, "tun", cfg.TunName,
 		"TUN interface name to create")
 	flag.StringVar(&cfg.TunAddr, "tun-addr", cfg.TunAddr,
-		"IP address for the relay side of the TUN")
+		"IP address for the relay side of the TUN (stock client pairs it with --android-ip 10.0.0.1)")
 	flag.IntVar(&cfg.TunPrefix, "tun-prefix", cfg.TunPrefix,
-		"Prefix length for tun-addr (e.g. 24 for /24)")
+		"Prefix length for tun-addr (stock client uses /24)")
 	flag.StringVar(&cfg.AndroidIP, "android-ip", cfg.AndroidIP,
-		"IP address assigned to the Android VPN client")
+		"IP address assigned to the Android VPN client (stock client hard-codes 10.0.0.1)")
 	flag.StringVar(&cfg.OutIface, "out-iface", "",
 		"Outbound interface for NAT (empty = auto-detect)")
 	flag.IntVar(&cfg.MTU, "mtu", cfg.MTU,
-		"MTU for TUN interface and packet buffers")
+		"MTU for TUN interface and packet buffers (1280..1400; stock Android client uses 1400)")
 	flag.BoolVar(&cfg.DisableAdbWatch, "no-adb-watch", cfg.DisableAdbWatch,
 		"Disable automatic `adb reverse` setup (run it manually instead)")
 	flag.BoolVar(&cfg.Verbose, "v", false,

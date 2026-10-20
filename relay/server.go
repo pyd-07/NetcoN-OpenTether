@@ -21,7 +21,14 @@ type Server struct {
 }
 
 func NewServer(cfg Config) (*Server, error) {
+	if cfg.AOAMode {
+		return nil, fmt.Errorf("invalid config: NewServer is TCP-only; use RunAOA for AOA mode")
+	}
+
 	setVerbose(cfg.Verbose)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
 
 	tun, err := OpenTUN(cfg.TunName)
 	if err != nil {

@@ -1,6 +1,6 @@
 //go:build linux && aoa
 
-// Build with: go build -tags aoa ./...
+// Build with: go build -tags aoa -o relay-bin .
 // Requires:   apt install libusb-1.0-0-dev
 //             go get github.com/google/gousb
 
@@ -22,13 +22,6 @@ const (
 	aoaSendString  uint8 = 52
 	aoaStartMode   uint8 = 53
 
-	aoaIdxManufacturer = 0
-	aoaIdxModel        = 1
-	aoaIdxDescription  = 2
-	aoaIdxVersion      = 3
-	aoaIdxURI          = 4
-	aoaIdxSerial       = 5
-
 	googleVID gousb.ID = 0x18D1
 	aoaPID    gousb.ID = 0x2D00
 	aoaADBPID gousb.ID = 0x2D01
@@ -39,15 +32,6 @@ const (
 	aoaMaxAttempts = 6
 	aoaDetectWait  = 500 * time.Millisecond
 )
-
-var aoaStrings = [6]string{
-	"OpenTether",
-	"OpenTether Relay",
-	"Reverse USB tethering — no root required",
-	"1.0",
-	"https://github.com/pyd-07/NetcoN-OpenTether",
-	"opentether-relay-01",
-}
 
 var androidVIDs = []gousb.ID{
 	0x04E8,

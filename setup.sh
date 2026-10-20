@@ -46,7 +46,7 @@ RELAY_EXTRA_FLAGS=()
 
 for arg in "$@"; do
   case "$arg" in
-    --aoa)        USE_AOA=true ;;
+    --aoa)        USE_AOA=true; RELAY_EXTRA_FLAGS+=(--aoa) ;;
     --build-only) BUILD_ONLY=true ;;
     --help|-h)    usage ;;
     *)            RELAY_EXTRA_FLAGS+=("$arg") ;;
@@ -147,13 +147,13 @@ if $USE_AOA; then
   else
     go get github.com/google/gousb@v1.1.3
   fi
-  go build -tags aoa -o relay . \
+  go build -tags aoa -o relay-bin . \
     || error "AOA relay build failed — check that libusb-1.0-0-dev is installed"
-  info "relay (AOA) built → ./relay"
+  info "relay (AOA) built → ./relay-bin"
 else
-  go build -o relay . \
-    || error "Relay build failed — run 'go build -o relay .' to see the full error"
-  info "relay built → ./relay"
+  go build -o relay-bin . \
+    || error "Relay build failed — run 'go build -o relay-bin .' to see the full error"
+  info "relay built → ./relay-bin"
 fi
 
 # ── 4. Build the Android app ──────────────────────────────────────────────────
@@ -183,17 +183,17 @@ if $BUILD_ONLY; then
   echo ""
   info "Build complete."
   echo ""
-  echo "  Relay binary  →  ./relay"
+  echo "  Relay binary  →  ./relay-bin"
   echo "  Android APK   →  ./$APK_NAME"
   echo ""
   if ! $USE_AOA; then
     echo "  To run manually:"
     echo "    adb install $APK_NAME"
-    echo "    sudo ./relay        # sets up adb reverse automatically"
+    echo "    sudo ./relay-bin    # sets up adb reverse automatically"
   else
     echo "  To run manually:"
     echo "    adb install $APK_NAME     # one-time, needs USB debugging just for install"
-    echo "    sudo ./relay              # connect cable — phone prompts to open app"
+    echo "    sudo ./relay-bin --aoa    # connect cable — phone prompts to open app"
   fi
   echo ""
   exit 0
@@ -298,4 +298,4 @@ trap cleanup EXIT INT TERM
 
 # exec replaces this shell so Ctrl+C hits the relay directly,
 # guaranteeing its iptables cleanup runs before our trap above.
-exec ./relay "${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}"
+exec ./relay-bin "${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}"

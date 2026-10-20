@@ -5,6 +5,7 @@ package relay
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -66,13 +67,13 @@ func (s *session) run(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		s.androidToTun(ctx)
+		s.androidToTun(ctx, cancel)
 	}()
 
 	go func() {
 		defer wg.Done()
 		defer cancel()
-		s.tunToAndroid(ctx)
+		s.tunToAndroid(ctx, cancel)
 	}()
 
 	wg.Wait()
@@ -80,8 +81,9 @@ func (s *session) run(ctx context.Context) {
 }
 
 // androidToTun reads OTP frames from the Android connection and writes their
-// raw IP payloads into the TUN device.
-func (s *session) androidToTun(ctx context.Context) {
+// raw IP payloads into the TUN device. cancel ends the whole session if a
+// reply cannot be written completely.
+func (s *session) androidToTun(ctx context.Context, cancel context.CancelFunc) {
 	r := bufio.NewReaderSize(s.conn, s.cfg.MTU*4)
 
 	for {
@@ -103,14 +105,25 @@ func (s *session) androidToTun(ctx context.Context) {
 				continue
 			}
 			debugf("→ TUN  %d bytes  conn_id=%d", len(frame.Payload), frame.ConnID)
-			if _, err := s.tun.Write(frame.Payload); err != nil {
+			n, err := s.tun.Write(frame.Payload)
+			if err != nil {
 				errorf("androidToTun: TUN write: %v", err)
+				return
+			}
+			if n != len(frame.Payload) {
+				errorf("androidToTun: TUN write: short write (%d of %d bytes)", n, len(frame.Payload))
 				return
 			}
 
 		case MsgPing:
 			// Reply asynchronously so a slow pong doesn't stall the read loop.
-			go s.sendPong()
+			// A partial frame corrupts the stream, so cancel the session.
+			go func() {
+				if err := s.sendPong(); err != nil {
+					errorf("sendPong: %v", err)
+					cancel()
+				}
+			}()
 
 		case MsgClose:
 			debugf("androidToTun: CLOSE for conn_id=%d", frame.ConnID)
@@ -136,7 +149,9 @@ func (s *session) androidToTun(ctx context.Context) {
 //
 // The unix.Poll loop with a 200 ms timeout keeps ctx cancellation responsive
 // even when no packets are arriving (TUN fds don't use Go's netpoller).
-func (s *session) tunToAndroid(ctx context.Context) {
+// cancel is used to fail the session if a background flush discovers a short
+// write that would otherwise leave a corrupted stream running.
+func (s *session) tunToAndroid(ctx context.Context, cancel context.CancelFunc) {
 	buf := make([]byte, s.cfg.MTU+4)
 	fd := s.tun.Fd()
 
@@ -146,8 +161,12 @@ func (s *session) tunToAndroid(ctx context.Context) {
 		// AOA: one USB transfer per frame — no batching.
 		fw = NewDirectWriter(s.conn)
 	} else {
-		// TCP: batch small frames under a 1 ms ticker.
-		fw = NewFlushWriter(ctx, s.conn, 32*1024, 512, 1*time.Millisecond)
+		// TCP: batch small frames under a 1 ms ticker. A failed background
+		// flush means the stream may be truncated or desynchronised.
+		fw = NewFlushWriter(ctx, s.conn, 32*1024, 512, 1*time.Millisecond, func(err error) {
+			errorf("tunToAndroid: flush to Android: %v", err)
+			cancel()
+		})
 	}
 	defer fw.Close()
 
@@ -210,15 +229,18 @@ func (s *session) tunToAndroid(ctx context.Context) {
 	}
 }
 
-func (s *session) sendPong() {
+func (s *session) sendPong() error {
 	s.fwMu.Lock()
 	fw := s.fw
 	s.fwMu.Unlock()
 
 	if fw == nil {
-		return // tunToAndroid hasn't initialised fw yet — pong silently dropped
+		// tunToAndroid hasn't initialised fw yet. Dropping a PONG is safe: the
+		// client will send another PING if it still needs liveness evidence.
+		return nil
 	}
 	if err := fw.Send(Frame{MsgType: MsgPong}); err != nil {
-		debugf("sendPong: %v", err)
+		return fmt.Errorf("send pong: %w", err)
 	}
+	return nil
 }

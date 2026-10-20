@@ -4,6 +4,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 )
 
 // RunAOA sets up the TUN device and network rules (identical to NewServer),
@@ -20,6 +21,9 @@ import (
 func RunAOA(cfg Config, stop <-chan struct{}) error {
 	cfg.AOAMode = true // must be set before any session is created
 	setVerbose(cfg.Verbose)
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
 
 	tun, err := OpenTUN(cfg.TunName)
 	if err != nil {

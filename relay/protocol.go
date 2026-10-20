@@ -90,12 +90,16 @@ func WriteFrame(w io.Writer, f Frame) error {
 	hdr[9] = f.Flags
 	// hdr[10:12] = 0 already (zero value)
 
-	if _, err := w.Write(hdr[:]); err != nil {
+	if n, err := w.Write(hdr[:]); err != nil {
 		return fmt.Errorf("write header: %w", err)
+	} else if n != len(hdr) {
+		return fmt.Errorf("write header: %w", io.ErrShortWrite)
 	}
 	if len(f.Payload) > 0 {
-		if _, err := w.Write(f.Payload); err != nil {
+		if n, err := w.Write(f.Payload); err != nil {
 			return fmt.Errorf("write payload: %w", err)
+		} else if n != len(f.Payload) {
+			return fmt.Errorf("write payload: %w", io.ErrShortWrite)
 		}
 	}
 	return nil

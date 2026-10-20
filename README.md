@@ -70,6 +70,17 @@ AOA (Android Open Accessory) is intended to provide direct USB transport without
 
 A true AOA session should involve Android USB accessory negotiation and the OpenTether accessory permission flow. A release binary that starts an ADB watcher instead is not using the intended AOA transport.
 
+For a source build, AOA mode must be selected explicitly; the `-tags aoa` build alone does not enable it:
+
+```bash
+sudo ./relay-bin --aoa
+```
+
+> **Accessory-version compatibility:** the current relay sends accessory version
+> `1`, matching the current `usb_accessory_filter.xml`. APKs built before the
+> filter changed from `1.0` to `1` will not match. Rebuild the APK; one relay
+> cannot satisfy both version strings.
+
 ### Linux setup script
 
 For a source checkout, the repository still provides the setup helper:
@@ -184,6 +195,31 @@ For `v0.9.5-beta.1`, please prioritize:
 - Battery optimization behavior.
 - OEM-specific background restrictions.
 
+### Validation status
+
+Automated checks cover the Go relay's configuration validation, short-write
+handling, session cancellation, protocol framing boundaries, AOA string/filter
+parity, and the matching Kotlin protocol codec. The current remediation was
+verified with:
+
+```bash
+go test -race -count=1 ./...
+go vet ./...
+make fmt-check
+make shellcheck
+bash -n setup.sh
+( cd android-client && ./gradlew testDebugUnitTest --no-daemon )
+git diff --check
+```
+
+Standard relay compilation is verified. AOA compilation requires
+`libusb-1.0-0-dev` and is not verified in every development environment.
+
+Not yet verified: AOA accessory negotiation and permission prompts, real USB
+bulk transfer behavior, TUN creation, route/NAT/firewall setup and cleanup,
+IPv6 forwarding, reconnect behavior, and end-to-end connectivity on physical
+Android devices. ADB is the recommended path until those checks are completed.
+
 ---
 
 ## Developer workflow
@@ -228,14 +264,14 @@ cd android-client
 Standard relay:
 
 ```bash
-go build -o relay .
+go build -o relay-bin .
 ```
 
 AOA-enabled relay:
 
 ```bash
 sudo apt install libusb-1.0-0-dev
-go build -tags aoa -o relay .
+go build -tags aoa -o relay-bin .
 ```
 
 ### Release artifacts
@@ -301,6 +337,34 @@ Every packet is wrapped in the OpenTether Protocol (OTP). The fixed header is 12
 - `ty`: message type
 - `fl`: flags
 - `reserved`: reserved and expected to be zero
+
+### Tunnel configuration constraints
+
+The relay validates its configuration before creating a TUN device or changing
+host networking:
+
+- `--listen` must be an explicit loopback IP literal (`127.0.0.1:8765` or
+  `[::1]:8765`) in ADB/TCP mode. Empty listeners, wildcard addresses,
+  hostnames, LAN addresses, and port 0 are rejected. AOA mode does not create a
+  TCP listener, so the listener may be empty there.
+- `--tun-prefix` must be `/24` through `/30`. The stock Android client uses
+  `10.0.0.1/24`; the relay default is `10.0.0.2/24`.
+- `--mtu` must be `1280` through `1400`. The lower bound is the IPv6 minimum
+  link MTU (the client routes IPv6); the upper bound matches the stock client's
+  fixed 1400-byte VPN MTU.
+- `--tun-addr` and `--android-ip` must be distinct IPv4 addresses in the same
+  tunnel subnet and must not be the subnet's network or broadcast address.
+  Unspecified, loopback, multicast, link-local, broadcast, IPv6, and IPv4-mapped
+  addresses are rejected.
+
+The stock Android client is not runtime-configurable: it connects to
+`127.0.0.1:8765`, assigns itself `10.0.0.1/24`, and uses a 1400-byte MTU. The
+relay defaults (`127.0.0.1:8765`, `--android-ip 10.0.0.1`,
+`--tun-addr 10.0.0.2`, `--tun-prefix 24`, `--mtu 1400`) match those values.
+Changing the listener host/port, `--android-ip`, or the tunnel subnet requires a
+matching Android client build; if you change the listener port, the
+`adb reverse` target must use that port too. `127.0.0.1:8765` is the reliable
+stock-ADB path; other loopback literals are accepted for custom setups.
 
 ---
 

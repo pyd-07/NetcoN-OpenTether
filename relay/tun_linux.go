@@ -4,6 +4,7 @@ package relay
 
 import (
 	"fmt"
+	"io"
 	"syscall"
 	"unsafe"
 )
@@ -26,10 +27,14 @@ const (
 type TunDevice struct {
 	fd   int
 	name string
+
+	// writeFn is syscall.Write in production. Tests inject a short-write
+	// implementation; nil falls back to syscall.Write.
+	writeFn func(int, []byte) (int, error)
 }
 
 // OpenTUN creates or opens a TUN interface with the given name.
-// Requires CAP_NET_ADMIN (run as root, or: sudo setcap cap_net_admin+ep ./relay).
+// Requires CAP_NET_ADMIN (run as root, or: sudo setcap cap_net_admin+ep ./relay-bin).
 func OpenTUN(name string) (*TunDevice, error) {
 	// Step 1: open the TUN/TAP character device
 	fd, err := syscall.Open(
@@ -68,7 +73,7 @@ func OpenTUN(name string) (*TunDevice, error) {
 		actualName = name
 	}
 
-	return &TunDevice{fd: fd, name: actualName}, nil
+	return &TunDevice{fd: fd, name: actualName, writeFn: syscall.Write}, nil
 }
 
 func (t *TunDevice) Name() string { return t.name }
@@ -85,9 +90,18 @@ func (t *TunDevice) Read(p []byte) (int, error) {
 
 // Write injects one raw IP packet into the kernel network stack.
 func (t *TunDevice) Write(p []byte) (int, error) {
-	n, err := syscall.Write(t.fd, p)
+	write := t.writeFn
+	if write == nil {
+		write = syscall.Write
+	}
+	n, err := write(t.fd, p)
 	if err != nil {
 		return 0, fmt.Errorf("tun write: %w", err)
+	}
+	if n != len(p) {
+		// A partial packet injection would silently drop the rest of the IP
+		// packet. Fail the session instead.
+		return n, fmt.Errorf("tun write: %w", io.ErrShortWrite)
 	}
 	return n, nil
 }

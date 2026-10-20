@@ -6,19 +6,14 @@
 # ── Go relay ──────────────────────────────────────────────────────────────────
 
 # Compiled binaries (repo root and any subdirectory)
-# Compiled binaries (repo root and any subdirectory)
-relay-linux-amd64
-relay-linux-arm64
+/relay-bin
+/opentether
 relay-linux-*
-relay/opentether
+OpenTether-*
 opentether-*
-relay/...
+relay/opentether
 relay/mock_android
 *.exe
-*.testgit rm --cached relay 2>/dev/null || true
-git rm --cached opentether 2>/dev/null || true
-git rm --cached '...' 2>/dev/null || true
-git commit -m "chore: untrack compiled binaries"
 *.out
 
 # Module cache / vendor (use go mod download instead)

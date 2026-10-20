@@ -1,6 +1,7 @@
 .PHONY: help doctor fmt fmt-check test test-go test-android lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
+RELAY_BIN ?= relay-bin
 ANDROID_DIR := android-client
 GRADLE := $(ANDROID_DIR)/gradlew
 
@@ -64,10 +65,10 @@ lint:
 build: build-go build-android
 
 build-go:
-	$(GO) build -trimpath -buildvcs=true ./...
+	$(GO) build -trimpath -buildvcs=true -o $(RELAY_BIN) .
 
 build-aoa:
-	$(GO) build -trimpath -buildvcs=true -tags aoa ./...
+	$(GO) build -trimpath -buildvcs=true -tags aoa -o $(RELAY_BIN) .
 
 build-android:
 	cd $(ANDROID_DIR) && ./gradlew assembleDebug --no-daemon --stacktrace
@@ -84,5 +85,6 @@ shellcheck:
 check: fmt-check test lint build-aoa shellcheck
 
 clean:
+	rm -f "$(RELAY_BIN)"
 	$(GO) clean -cache -testcache
 	cd $(ANDROID_DIR) && ./gradlew clean --no-daemon
