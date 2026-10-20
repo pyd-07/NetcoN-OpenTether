@@ -1,10 +1,12 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -89,5 +91,101 @@ func TestFlushWriterTickerReportsShortWrite(t *testing.T) {
 
 	if ctx.Err() == nil {
 		t.Fatal("flush error handler did not cancel the session context")
+	}
+}
+
+// Small frames should stay buffered until an explicit flush or the ticker.
+// Using a one-hour interval keeps the test deterministic while still starting
+// the real ticker goroutine.
+func TestFlushWriterBatchesSmallFramesUntilFlush(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var out bytes.Buffer
+	fw := NewFlushWriter(ctx, &out, 4096, 512, time.Hour, nil)
+	defer fw.Close()
+
+	frame := Frame{ConnID: 7, MsgType: MsgData, Payload: []byte("abc")}
+	if err := fw.Send(frame); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("small frame flushed immediately: %d bytes", out.Len())
+	}
+
+	if err := fw.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	want := BuildFrame(frame)
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("flushed bytes = %x, want %x", out.Bytes(), want)
+	}
+}
+
+// Frames at or above the large threshold must be written immediately.
+func TestFlushWriterFlushesLargeFramesImmediately(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var out bytes.Buffer
+	fw := NewFlushWriter(ctx, &out, 4096, 512, time.Hour, nil)
+	defer fw.Close()
+
+	frame := Frame{
+		ConnID:  8,
+		MsgType: MsgData,
+		Payload: bytes.Repeat([]byte{0x41}, 512),
+	}
+	if err := fw.Send(frame); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	want := BuildFrame(frame)
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("large frame was not flushed immediately (got %d bytes, want %d)", out.Len(), len(want))
+	}
+}
+
+// countingConn records how many Write calls and bytes a writer produces.
+type countingConn struct {
+	net.Conn
+	mu     sync.Mutex
+	writes int
+	total  int
+}
+
+func (c *countingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes++
+	c.total += len(p)
+	return len(p), nil
+}
+
+// AOA relies on exactly one Write per frame so each frame maps to one USB bulk
+// transfer. This protects that invariant independently of the short-write test.
+func TestDirectWriterWritesOneFramePerSend(t *testing.T) {
+	conn := &countingConn{}
+	fw := NewDirectWriter(conn)
+
+	frames := []Frame{
+		{ConnID: 1, MsgType: MsgData, Payload: []byte("one")},
+		{ConnID: 2, MsgType: MsgData, Payload: []byte("two")},
+	}
+	wantBytes := 0
+	for _, frame := range frames {
+		if err := fw.Send(frame); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		wantBytes += len(BuildFrame(frame))
+	}
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.writes != len(frames) {
+		t.Fatalf("Write calls = %d, want %d", conn.writes, len(frames))
+	}
+	if conn.total != wantBytes {
+		t.Fatalf("bytes written = %d, want %d", conn.total, wantBytes)
 	}
 }

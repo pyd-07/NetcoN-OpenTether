@@ -36,6 +36,37 @@ func NewAdbWatcher(port int) *AdbWatcher {
 	}
 }
 
+// parseAdbDevices returns the serials whose adb state is exactly "device".
+// The first line is the adb header and is skipped. Unauthorized, offline, and
+// malformed lines are intentionally ignored.
+func parseAdbDevices(out []byte) map[string]struct{} {
+	current := make(map[string]struct{})
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Scan()
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || fields[1] != "device" {
+			continue
+		}
+		current[fields[0]] = struct{}{}
+	}
+	return current
+}
+
+// adbBackoff returns the bounded exponential delay for a one-based attempt.
+// The sequence is 500ms, 1s, 2s, 4s, 8s, then 8s thereafter.
+func adbBackoff(attempt int) time.Duration {
+	backoff := adbBackoffMin
+	for i := 1; i < attempt; i++ {
+		backoff *= 2
+		if backoff >= adbBackoffMax {
+			return adbBackoffMax
+		}
+	}
+	return backoff
+}
+
 func (w *AdbWatcher) Watch(ctx context.Context) {
 	w.poll(ctx)
 
@@ -68,21 +99,8 @@ func (w *AdbWatcher) poll(ctx context.Context) {
 		return
 	}
 
-	current := make(map[string]struct{})
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	scanner.Scan()
-
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 {
-			continue
-		}
-		serial, state := fields[0], fields[1]
-		if state != "device" {
-			continue
-		}
-		current[serial] = struct{}{}
-
+	current := parseAdbDevices(out)
+	for serial := range current {
 		w.mu.Lock()
 		tracker := w.states[serial]
 		if tracker == nil {
@@ -128,10 +146,7 @@ func (w *AdbWatcher) setupReverse(ctx context.Context, serial string, tracker *C
 			return
 		}
 
-		backoff := adbBackoffMin << (attempt - 1)
-		if backoff > adbBackoffMax {
-			backoff = adbBackoffMax
-		}
+		backoff := adbBackoff(attempt)
 		debugf("adb watcher: reverse attempt %d/%d for [%s] failed: %v — %s; retrying in %s",
 			attempt, adbMaxAttempts, serial, err, strings.TrimSpace(string(out)), backoff)
 

@@ -17,7 +17,7 @@ Reverse USB tethering for Android: route your Android device's traffic through a
 - A USB data cable
 - A Linux PC with Internet access
 - `adb` for ADB transport, or USB/libusb access for AOA
-- `iptables` and `iproute2` on the Linux PC
+- `iptables`, `ip6tables`, and `iproute2` on the Linux PC
 
 ### Install the beta
 
@@ -51,6 +51,21 @@ adb devices
 
 The device should appear as `device`, not `unauthorized`.
 
+Install the APK from the release asset or a local build:
+
+```bash
+adb install -r /path/to/OpenTether-v0.9.5-beta.1-android.apk
+```
+
+The relay normally configures `adb reverse tcp:8765 tcp:8765` itself. If you run
+it with `--no-adb-watch`, configure the reverse mapping in the user ADB context
+and verify it:
+
+```bash
+adb reverse tcp:8765 tcp:8765
+adb reverse --list
+```
+
 4. Start the relay as root:
 
 ```bash
@@ -63,6 +78,14 @@ sudo ./OpenTether-v0.9.5-beta.1-linux-amd64
 8. Verify that Internet traffic works through the PC.
 
 Keep the relay terminal open while the tunnel is active. The relay needs permission to create the TUN interface and configure routing/NAT.
+
+For the full staged procedure, expected log observations, fault isolation, and
+sanitized evidence bundle, see
+[`docs/adb-integration.md`](docs/adb-integration.md). That guide contains manual,
+privileged, and physical-device steps; it is not an automated test. A separate
+manual ADB run on 2026-10-20 documented the reverse/control path, VPN/TUN data
+path, and cleanup, while deliberate traffic and recovery stages remain
+outstanding.
 
 ### AOA mode — experimental
 
@@ -199,26 +222,38 @@ For `v0.9.5-beta.1`, please prioritize:
 
 Automated checks cover the Go relay's configuration validation, short-write
 handling, session cancellation, protocol framing boundaries, AOA string/filter
-parity, and the matching Kotlin protocol codec. The current remediation was
-verified with:
+parity, the matching Kotlin protocol codec, deterministic Android-to-TUN and
+TUN-to-Android session paths, ADB device-state parsing/backoff, and the Android
+startup-error lifecycle state. The current local remediation was verified with:
 
 ```bash
-go test -race -count=1 ./...
+go test -race -count=1 -timeout=120s ./...
 go vet ./...
 make fmt-check
+make test-integration
 make shellcheck
 bash -n setup.sh
 ( cd android-client && ./gradlew testDebugUnitTest --no-daemon )
 git diff --check
 ```
 
+The session tests use pipes and a TUN write seam; they do not open `/dev/net/tun`,
+invoke `adb`, or send traffic. They are mock integration tests, not real-device
+validation.
+
 Standard relay compilation is verified. AOA compilation requires
 `libusb-1.0-0-dev` and is not verified in every development environment.
 
-Not yet verified: AOA accessory negotiation and permission prompts, real USB
-bulk transfer behavior, TUN creation, route/NAT/firewall setup and cleanup,
-IPv6 forwarding, reconnect behavior, and end-to-end connectivity on physical
-Android devices. ADB is the recommended path until those checks are completed.
+A manual ADB device run on 2026-10-20 established the reverse transport, the
+app-owned relay control session, PING/PONG, the VPN/TUN data path, and cleanup
+that restored the host networking baseline. Real background traffic was observed
+after the VPN was started manually; that traffic is expected during an active
+tunnel. Still outstanding: AOA accessory negotiation and permission prompts,
+real USB bulk transfer behavior, deliberate IPv4/DNS/HTTPS and large-transfer
+traffic, IPv6 forwarding, reconnect behavior, and full end-to-end connectivity
+validation on physical Android devices. ADB remains the recommended path while
+those checks are completed. See
+[`docs/adb-integration.md`](docs/adb-integration.md) for the staged procedure.
 
 ---
 
@@ -241,6 +276,7 @@ make fmt
 make fmt-check
 make test
 make test-go
+make test-integration
 make test-android
 make lint
 make build
@@ -375,9 +411,12 @@ stock-ADB path; other loopback literals are accepted for custom setups.
 | `adb devices` is empty | Confirm USB debugging, Windows/WSL USB access, and that the phone is attached to the WSL environment. |
 | Device is `unauthorized` | Unlock the phone and accept the USB debugging authorization prompt. |
 | `TUNSETIFF ioctl: operation not permitted` | Run the relay with `sudo`. |
-| `iptables` not found | Install `iptables` and `iproute2`. |
+| `iptables` or `ip6tables` not found | Install `iptables` and `iproute2`; the relay configures both IPv4 and IPv6 NAT. |
+| `adb reverse --list` does not show `tcp:8765` | Verify the reverse mapping in the same ADB context as the authorized device, or run the relay with `--no-adb-watch` and configure it manually. |
+| Relay is ready but no Android session connects | Check that the app is running, the VPN permission was granted, and `adb reverse` points at the relay listener; inspect both relay and `OT/UsbTunnelClient` logs. |
 | VPN stops after screen lock | Check battery optimization and OEM background restrictions in the Diagnostics screen. |
-| VPN starts but traffic does not flow | Confirm the relay is running and inspect the relay log for transport/session errors. |
+| VPN starts but traffic does not flow | Test an IPv4 literal first, then a hostname to separate tunnel/route/NAT failures from DNS failures; inspect relay and app logs for session errors. |
+| IPv4 works but IPv6 fails | Treat IPv6 as a separate result; check `ip6tables`, host IPv6 forwarding/upstream support, and the `ot0` address. |
 | AOA binary starts an ADB watcher | Treat the AOA release path as experimental; use ADB for baseline beta validation and report the relay output. |
 
 For bug reports, include Android version/API, device model, transport mode, relay output, and relevant `adb logcat` output when available.

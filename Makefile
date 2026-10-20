@@ -1,4 +1,4 @@
-.PHONY: help doctor fmt fmt-check test test-go test-android lint build build-go build-aoa build-android shellcheck check clean
+.PHONY: help doctor fmt fmt-check test test-go test-integration test-android lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
 RELAY_BIN ?= relay-bin
@@ -12,6 +12,7 @@ help:
 	@echo "  make fmt-check       Verify Go formatting without changing files"
 	@echo "  make test            Run Go and Android tests"
 	@echo "  make test-go         Run Go tests with the race detector"
+	@echo "  make test-integration Run deterministic session/protocol tests"
 	@echo "  make test-android    Run Android unit tests"
 	@echo "  make lint            Run Android lint"
 	@echo "  make build           Build Go relays and debug APK"
@@ -54,7 +55,12 @@ fmt-check:
 test: test-go test-android
 
 test-go:
-	$(GO) test -race ./...
+	$(GO) test -race -count=1 -timeout=120s ./...
+
+# Deterministic, non-privileged relay tests. These use pipes/test doubles and
+# never open /dev/net/tun, invoke adb, or change host networking.
+test-integration:
+	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|AdbBackoff)' ./relay -v
 
 test-android:
 	cd $(ANDROID_DIR) && ./gradlew test --no-daemon --stacktrace

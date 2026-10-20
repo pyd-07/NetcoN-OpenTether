@@ -38,6 +38,7 @@ object TunnelRuntimeHolder {
             statusLabel = "Permission denied",
             detail = "VPN consent was not granted",
             sessionStartedAtMs = null,
+            lastError = null,
         )
     }
 
@@ -109,6 +110,11 @@ object TunnelRuntimeHolder {
         )
     }
 
+    /**
+     * Runtime failure while the service may still be running or reconnecting.
+     * Keep [TunnelRuntimeState.isRunning] unchanged so the UI does not offer a
+     * duplicate Start while the session is still alive.
+     */
     fun onError(transport: TunnelTransport, detail: String) {
         _state.value = _state.value.copy(
             phase = TunnelPhase.Error,
@@ -116,6 +122,23 @@ object TunnelRuntimeHolder {
             statusLabel = "Error",
             detail = detail,
             relayEndpoint = relayEndpointFor(transport),
+            lastError = detail,
+        )
+    }
+
+    /**
+     * Fatal failure before the tunnel is running. Unlike [onError], this clears
+     * isRunning so Start becomes available again after the service stops.
+     */
+    fun onStartupError(transport: TunnelTransport, detail: String) {
+        _state.value = _state.value.copy(
+            phase = TunnelPhase.Error,
+            transport = transport,
+            isRunning = false,
+            statusLabel = "Error",
+            detail = detail,
+            relayEndpoint = relayEndpointFor(transport),
+            sessionStartedAtMs = null,
             lastError = detail,
         )
     }
@@ -135,6 +158,7 @@ object TunnelRuntimeHolder {
             statusLabel = "Idle",
             detail = "VPN offline",
             sessionStartedAtMs = null,
+            lastError = null,
         )
     }
 
