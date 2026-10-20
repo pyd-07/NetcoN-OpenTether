@@ -123,6 +123,16 @@ adb reverse tcp:8765 tcp:8765
 adb reverse --list
 ```
 
+If no ADB executable on the relay's `PATH` can see the device — for example a
+WSL relay where only a Windows ADB server on a non-default port sees the phone
+— point the watcher at that executable and server instead:
+
+```bash
+sudo ./relay-bin --adb-bin "/mnt/c/Users/<user>/…/platform-tools/adb.exe" --adb-port 5038
+```
+
+`--adb-port 0` (the default) keeps the ADB client's own default server port.
+
 Expected: `adb reverse --list` contains `tcp:8765 tcp:8765`. A reverse mapping
 only proves the forwarding rule exists; it does not prove the relay is listening
 or that the VPN is connected.

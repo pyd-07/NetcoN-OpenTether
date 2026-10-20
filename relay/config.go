@@ -33,6 +33,17 @@ type Config struct {
 	// if adb is not installed on the PC.
 	DisableAdbWatch bool
 
+	// AdbBin is the ADB executable used by the automatic reverse-setup
+	// watcher. Empty means "adb" (resolved via PATH). Point it at a full
+	// path — for example the Windows adb.exe invoked from WSL — when the
+	// default executable's ADB server cannot see the device.
+	AdbBin string
+
+	// AdbPort is the ADB server port the watcher targets via the ADB
+	// client's -P flag. Zero keeps the ADB client's default server port
+	// behaviour (usually 5037).
+	AdbPort int
+
 	// AOAMode switches the session write path from FlushWriter (TCP batching)
 	// to DirectWriter (one USB transfer per OTP frame).
 	//
@@ -58,6 +69,9 @@ type Config struct {
 func (c *Config) Validate() error {
 	if c.MTU < MinMTU || c.MTU > MaxMTU {
 		return fmt.Errorf("MTU %d is outside the supported range %d..%d (the stock Android client uses %d)", c.MTU, MinMTU, MaxMTU, MaxMTU)
+	}
+	if c.AdbPort < 0 || c.AdbPort > 65535 {
+		return fmt.Errorf("adb server port %d is outside the valid range 0..65535 (0 = ADB client default)", c.AdbPort)
 	}
 	if c.TunPrefix < MinTunnelPrefix || c.TunPrefix > MaxTunnelPrefix {
 		return fmt.Errorf("TUN prefix /%d is outside the supported /%d../%d range", c.TunPrefix, MinTunnelPrefix, MaxTunnelPrefix)

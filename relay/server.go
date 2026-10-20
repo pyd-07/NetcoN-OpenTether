@@ -66,7 +66,7 @@ func (s *Server) Run() error {
 
 	if !s.cfg.DisableAdbWatch {
 		port := listenPort(s.cfg.ListenAddr)
-		watcher := NewAdbWatcher(port)
+		watcher := NewAdbWatcher(port, s.cfg.AdbBin, s.cfg.AdbPort)
 		go watcher.Watch(s.ctx)
 		logf("ADB watcher started — automatic device detection and reconnect enabled")
 	}

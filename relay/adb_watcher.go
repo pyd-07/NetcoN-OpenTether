@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,24 +17,66 @@ const (
 	adbBackoffMin   = 500 * time.Millisecond
 	adbBackoffMax   = 8 * time.Second
 	adbMaxAttempts  = 5
+
+	// adbEmptyWarnThreshold is the number of consecutive `adb devices` polls
+	// with no ready device before the watcher emits a warning (~10s at the
+	// poll interval), giving a freshly plugged or booting device time to
+	// appear before anything is reported.
+	adbEmptyWarnThreshold = 10
+	// adbEmptyWarnRepeat re-warns every N consecutive empty polls after the
+	// threshold so a persistently empty server stays diagnosable without
+	// flooding the log once per second.
+	adbEmptyWarnRepeat = 120
+	// adbFailWarnRepeat re-warns every N consecutive `adb devices` execution
+	// failures after the first one (the first failure is always reported).
+	adbFailWarnRepeat = 60
 )
 
 // AdbWatcher polls adb for ready devices and maintains one reverse tunnel
 // setup per serial. Detection is explicit about device lifecycle so a USB
 // unplug/replug is treated as a new connection rather than a stale session.
 type AdbWatcher struct {
-	port   int
-	mu     sync.Mutex
-	known  map[string]struct{}
-	states map[string]*ConnectionStateTracker
+	port    int
+	adbBin  string
+	adbPort int
+	mu      sync.Mutex
+	known   map[string]struct{}
+	states  map[string]*ConnectionStateTracker
+
+	// Counters below are only touched by poll, which runs serially in Watch
+	// (or directly from tests), so they need no additional synchronisation.
+	emptyPolls     int // consecutive `adb devices` polls with no ready device
+	pollFailStreak int // consecutive failed `adb devices` executions
 }
 
-func NewAdbWatcher(port int) *AdbWatcher {
-	return &AdbWatcher{
-		port:   port,
-		known:  make(map[string]struct{}),
-		states: make(map[string]*ConnectionStateTracker),
+func NewAdbWatcher(port int, adbBin string, adbPort int) *AdbWatcher {
+	if adbBin == "" {
+		adbBin = "adb"
 	}
+	return &AdbWatcher{
+		port:    port,
+		adbBin:  adbBin,
+		adbPort: adbPort,
+		known:   make(map[string]struct{}),
+		states:  make(map[string]*ConnectionStateTracker),
+	}
+}
+
+// adbCommandArgs builds the argument list for one watcher-owned ADB command.
+// Every ADB invocation the watcher performs goes through this helper so the
+// configured server port is applied consistently. adbPort == 0 keeps the ADB
+// client's default server port.
+func (w *AdbWatcher) adbCommandArgs(args ...string) []string {
+	if w.adbPort == 0 {
+		return args
+	}
+	return append([]string{"-P", strconv.Itoa(w.adbPort)}, args...)
+}
+
+// adbCommand runs one watcher-owned ADB command against the configured
+// executable and server port, returning its combined output.
+func (w *AdbWatcher) adbCommand(args ...string) ([]byte, error) {
+	return exec.Command(w.adbBin, w.adbCommandArgs(args...)...).CombinedOutput()
 }
 
 // parseAdbDevices returns the serials whose adb state is exactly "device".
@@ -93,13 +136,30 @@ func (w *AdbWatcher) poll(ctx context.Context) {
 		return
 	}
 
-	out, err := exec.Command("adb", "devices").CombinedOutput()
+	out, err := w.adbCommand("devices")
 	if err != nil {
-		debugf("adb watcher: devices poll failed: %v — %s", err, strings.TrimSpace(string(out)))
+		w.pollFailStreak++
+		// The first failure is always actionable; afterwards re-warn only
+		// every adbFailWarnRepeat polls so a broken setup does not flood
+		// the log once per polling interval.
+		if w.pollFailStreak == 1 || w.pollFailStreak%adbFailWarnRepeat == 0 {
+			warnf("adb watcher: %s devices failed (%d consecutive failures): %v — %s",
+				w.adbBin, w.pollFailStreak, err, strings.TrimSpace(string(out)))
+		}
 		return
 	}
+	w.pollFailStreak = 0
 
 	current := parseAdbDevices(out)
+	if len(current) == 0 {
+		w.emptyPolls++
+		if w.emptyPolls == adbEmptyWarnThreshold || w.emptyPolls%adbEmptyWarnRepeat == 0 {
+			warnf("adb watcher: ADB reports no ready devices after %d consecutive polls — no device in state \"device\" has appeared on this server; check the device authorization state and the configured executable/server port (--adb-bin, --adb-port)",
+				w.emptyPolls)
+		}
+	} else {
+		w.emptyPolls = 0
+	}
 	for serial := range current {
 		w.mu.Lock()
 		tracker := w.states[serial]
@@ -139,7 +199,7 @@ func (w *AdbWatcher) setupReverse(ctx context.Context, serial string, tracker *C
 	args := []string{"-s", serial, "reverse", portStr, portStr}
 
 	for attempt := 1; attempt <= adbMaxAttempts; attempt++ {
-		out, err := exec.Command("adb", args...).CombinedOutput()
+		out, err := w.adbCommand(args...)
 		if err == nil {
 			tracker.Set(StateConnected)
 			logf("adb watcher: reverse tunnel ready for [%s] on port %d", serial, w.port)

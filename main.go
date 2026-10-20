@@ -19,6 +19,8 @@ func main() {
 		AndroidIP:       "10.0.0.1",
 		MTU:             1400,
 		DisableAdbWatch: false,
+		AdbBin:          "adb",
+		AdbPort:         0,
 	}
 
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr,
@@ -37,6 +39,10 @@ func main() {
 		"MTU for TUN interface and packet buffers (1280..1400; stock Android client uses 1400)")
 	flag.BoolVar(&cfg.DisableAdbWatch, "no-adb-watch", cfg.DisableAdbWatch,
 		"Disable automatic `adb reverse` setup (run it manually instead)")
+	flag.StringVar(&cfg.AdbBin, "adb-bin", cfg.AdbBin,
+		"ADB executable used for automatic `adb reverse` setup (default \"adb\" from PATH; point at a full path such as the Windows adb.exe when invoking from WSL)")
+	flag.IntVar(&cfg.AdbPort, "adb-port", cfg.AdbPort,
+		"ADB server port for automatic `adb reverse` setup (0 = the ADB client's default; e.g. 5038 for a non-default Windows ADB server)")
 	flag.BoolVar(&cfg.Verbose, "v", false,
 		"Enable per-packet debug logging")
 	aoa := flag.Bool("aoa", false,

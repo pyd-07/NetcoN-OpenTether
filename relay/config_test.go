@@ -72,6 +72,35 @@ func TestConfigValidateListener(t *testing.T) {
 	}
 }
 
+func TestConfigValidateAdbPort(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    int
+		wantErr string
+	}{
+		{"zero keeps ADB client default", 0, ""},
+		{"non-default server port", 5038, ""},
+		{"negative port", -1, "adb server port"},
+		{"port above range", 65536, "adb server port"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testValidConfig()
+			cfg.AdbPort = tc.port
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("AdbPort %d rejected: %v", tc.port, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("AdbPort %d: err = %v, want error containing %q", tc.port, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfigValidateAllowsEmptyListenAddrInAOAMode(t *testing.T) {
 	cfg := testValidConfig()
 	cfg.AOAMode = true
