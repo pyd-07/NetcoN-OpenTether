@@ -65,7 +65,7 @@ test-go:
 # Deterministic, non-privileged relay tests. These use pipes/test doubles and
 # never open /dev/net/tun, invoke adb, or change host networking.
 test-integration:
-	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|ParseAdbReverseList|Adb|SetupReverse|Poll|NewAdbWatcher|Network|ParseDefaultInterface|Tun|BuildFrame|ReadFrame|WriteFrame|Roundtrip|Config|ConnectionState|Oversized)' ./relay -v
+	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|ParseAdbReverseList|Adb|SetupReverse|Poll|NewAdbWatcher|Network|ParseDefaultInterface|Tun|BuildFrame|ReadFrame|WriteFrame|Roundtrip|Config|ConnectionState|Oversized)' ./internal/... -v
 
 test-android:
 	cd $(ANDROID_DIR) && ./gradlew test --no-daemon --stacktrace
@@ -79,10 +79,10 @@ lint:
 build: build-go build-android
 
 build-go:
-	$(GO) build -trimpath -buildvcs=true -o $(RELAY_BIN) .
+	$(GO) build -trimpath -buildvcs=true -o $(RELAY_BIN) ./cmd/opentether
 
 build-aoa:
-	$(GO) build -trimpath -buildvcs=true -tags aoa -o $(RELAY_BIN) .
+	$(GO) build -trimpath -buildvcs=true -tags aoa -o $(RELAY_BIN) ./cmd/opentether
 
 build-android:
 	cd $(ANDROID_DIR) && ./gradlew assembleDebug --no-daemon --stacktrace

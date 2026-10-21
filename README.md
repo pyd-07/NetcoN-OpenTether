@@ -296,13 +296,13 @@ cd android-client
 Standard relay:
 
 ```bash
-go build -o relay-bin .
+go build -o relay-bin ./cmd/opentether
 ```
 
 AOA-enabled relay (requires libusb development files):
 
 ```bash
-go build -tags aoa -o relay-bin .
+go build -tags aoa -o relay-bin ./cmd/opentether
 ```
 
 ### Release artifacts

@@ -1,6 +1,6 @@
 package com.opentether.vpn
 
-import com.opentether.StatsHolder
+import com.opentether.stats.StatsHolder
 import com.opentether.logging.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

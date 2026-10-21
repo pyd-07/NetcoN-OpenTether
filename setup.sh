@@ -214,12 +214,12 @@ section "Building relay"
 if $USE_AOA; then
   # AOA dependencies are already declared in go.mod. Do not run "go get"
   # during setup: it can mutate the checkout and make builds non-reproducible.
-  go build -tags aoa -o relay-bin . \
+  go build -tags aoa -o relay-bin ./cmd/opentether \
     || error "AOA relay build failed — check that libusb-1.0-0-dev and the Go dependencies are available"
   info "relay (AOA) built → ./relay-bin"
 else
-  go build -o relay-bin . \
-    || error "Relay build failed — run 'go build -o relay-bin .' to see the full error"
+  go build -o relay-bin ./cmd/opentether \
+    || error "Relay build failed — run 'go build -o relay-bin ./cmd/opentether' to see the full error"
   info "relay built → ./relay-bin"
 fi
 
