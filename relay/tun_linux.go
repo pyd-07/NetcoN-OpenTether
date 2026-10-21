@@ -15,11 +15,20 @@ const (
 	// Computed: (1<<30) | ('T'<<8) | 202 | (4<<16) = 0x400454CA
 	tunSetIff uintptr = 0x400454CA
 
-	iffTUN  uint16 = 0x0001 // TUN device (not TAP)
-	iffNOPI uint16 = 0x1000 // suppress 4-byte packet-info header on reads
+	iffTUN     uint16 = 0x0001 // TUN device (not TAP)
+	iffNOPI    uint16 = 0x1000 // suppress 4-byte packet-info header on reads
+	iffTUNEXCL uint16 = 0x8000 // fail if the named interface already exists
 
 	ifNameSize = 16 // IFNAMSIZ including null terminator
 )
+
+// tunIFFlags returns the flags used for TUNSETIFF. IFF_TUN_EXCL prevents this
+// process from attaching to an interface owned by another relay instance: a
+// shared TUN would steal packets and cleanup would tear down the other
+// instance's networking.
+func tunIFFlags() uint16 {
+	return iffTUN | iffNOPI | iffTUNEXCL
+}
 
 // TunDevice wraps a Linux TUN file descriptor.
 // Read returns raw IPv4/IPv6 packets (no frame header).
@@ -55,7 +64,7 @@ func OpenTUN(name string) (*TunDevice, error) {
 	// struct ifreq layout: 16-byte name, then a union; flags at offset 16
 	var ifr [40]byte
 	copy(ifr[:ifNameSize], []byte(name)) // null-padded automatically
-	*(*uint16)(unsafe.Pointer(&ifr[ifNameSize])) = iffTUN | iffNOPI
+	*(*uint16)(unsafe.Pointer(&ifr[ifNameSize])) = tunIFFlags()
 
 	if _, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
@@ -64,6 +73,9 @@ func OpenTUN(name string) (*TunDevice, error) {
 		uintptr(unsafe.Pointer(&ifr[0])),
 	); errno != 0 {
 		syscall.Close(fd)
+		if errno == syscall.EBUSY {
+			return nil, fmt.Errorf("TUNSETIFF ioctl: %w — interface %q is already owned by another process", errno, name)
+		}
 		return nil, fmt.Errorf("TUNSETIFF ioctl: %w", errno)
 	}
 

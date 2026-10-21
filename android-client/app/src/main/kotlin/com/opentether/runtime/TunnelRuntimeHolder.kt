@@ -98,8 +98,11 @@ object TunnelRuntimeHolder {
         )
     }
 
-    fun onTransportConnected(transport: TunnelTransport, detail: String) {
-        val startedAt = _state.value.sessionStartedAtMs ?: System.currentTimeMillis()
+    fun onTransportConnected(
+        transport: TunnelTransport,
+        detail: String,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
         _state.value = _state.value.copy(
             phase = TunnelPhase.Connected,
             transport = transport,
@@ -107,7 +110,7 @@ object TunnelRuntimeHolder {
             statusLabel = "Connected",
             detail = detail,
             relayEndpoint = relayEndpointFor(transport),
-            sessionStartedAtMs = startedAt,
+            sessionStartedAtMs = nowMs,
             lastError = null,
         )
     }
@@ -120,6 +123,10 @@ object TunnelRuntimeHolder {
             statusLabel = "Reconnecting",
             detail = detail,
             relayEndpoint = relayEndpointFor(transport),
+            // A reconnect starts a new session; do not carry the previous
+            // session's start time or stale error into it.
+            sessionStartedAtMs = null,
+            lastError = null,
         )
     }
 

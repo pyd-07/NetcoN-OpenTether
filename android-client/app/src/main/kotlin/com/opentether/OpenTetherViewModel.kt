@@ -87,20 +87,48 @@ class OpenTetherViewModel(application: Application) : AndroidViewModel(applicati
 
     fun startVpnService() {
         val transport = AppPreferences.current(app).preferredTransport
+        if (TunnelRuntimeHolder.state.value.isRunning) {
+            // A duplicate tap while the service is starting/running must not
+            // reset the visible state to Starting.
+            AppLogger.w("OT/MainActivity", "VPN start ignored — a session is already running")
+            return
+        }
+
         AppPreferences.setVpnRequested(app, true)
         TunnelRuntimeHolder.onServiceStarting(transport)
-        ContextCompat.startForegroundService(
-            app,
-            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START },
-        )
+        try {
+            ContextCompat.startForegroundService(
+                app,
+                Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_START },
+            )
+        } catch (e: Exception) {
+            // Android 12+ can reject a background foreground-service start.
+            // Surface a recoverable error instead of crashing or leaving the
+            // UI stuck in "Connecting…".
+            AppLogger.e("OT/MainActivity", "startForegroundService failed: ${e.javaClass.simpleName}: ${e.message}")
+            AppPreferences.setVpnRequested(app, false)
+            TunnelRuntimeHolder.onStartupError(
+                transport,
+                "Unable to start VPN service: ${e.message ?: e.javaClass.simpleName}",
+            )
+        }
     }
 
     fun stopVpnService() {
         AppPreferences.setVpnRequested(app, false)
         TunnelRuntimeHolder.onServiceStopping()
-        app.startService(
-            Intent(app, OpenTetherVpnService::class.java).apply { action = ACTION_STOP },
-        )
+        val serviceIntent = Intent(app, OpenTetherVpnService::class.java)
+        try {
+            app.startService(serviceIntent.apply { action = ACTION_STOP })
+        } catch (e: Exception) {
+            // Sending an action to a background service can be rejected. Fall
+            // back to stopping the service directly so the UI is not stranded
+            // in "Disconnecting…".
+            AppLogger.w("OT/MainActivity", "startService STOP failed: ${e.message}; stopping service directly")
+            if (!app.stopService(serviceIntent)) {
+                TunnelRuntimeHolder.onStopped()
+            }
+        }
     }
 
     fun onVpnPermissionDenied() {

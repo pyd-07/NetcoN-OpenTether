@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -187,5 +188,36 @@ func TestDirectWriterWritesOneFramePerSend(t *testing.T) {
 	}
 	if conn.total != wantBytes {
 		t.Fatalf("bytes written = %d, want %d", conn.total, wantBytes)
+	}
+}
+
+// Once a flush fails, bufio is permanently failed and the stream is
+// unrecoverable. The ticker must report once and stop, not call onError on
+// every tick for the rest of the session.
+func TestFlushWriterTickerStopsAfterFlushError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var calls int32
+	fw := NewFlushWriter(ctx, shortFlushWriter{}, 1024, 512, time.Millisecond, func(error) {
+		atomic.AddInt32(&calls, 1)
+	})
+	defer fw.Close()
+
+	if err := fw.Send(Frame{MsgType: MsgData, Payload: []byte("abc")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&calls) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("onError calls after first failure = %d, want 1", got)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("onError called %d times after the ticker should have stopped", got)
 	}
 }

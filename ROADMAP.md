@@ -43,12 +43,29 @@ The roadmap is intentionally split into small releases so that each phase can be
 - Added documentation and troubleshooting content in the app and repository.
 - Expanded Go relay, ADB watcher/configuration, protocol/session, and Android lifecycle test coverage.
 
+### Validated in the v0.9.5 testing cycle
+
+- The ADB baseline passed on one POCO C65 (`2310FPCA4I`), Android 15/API 35,
+  using WSL2 Debian and Windows ADB 37.0.1 on server port 5038. Relay startup,
+  reverse mapping, VPN/TUN, NAT, IPv4, DNS, HTTPS, an approximately 10 MB
+  transfer, relay restart, USB reconnect, post-recovery traffic, and clean
+  shutdown/cleanup passed.
+- The UI showed **Waiting for your computer** during relay downtime and
+  reconnected automatically after relay restart and USB reconnect.
+- The Android-local IPv6 TUN path passed; external IPv6 was blocked by the
+  host's missing global IPv6 address/default route.
+- The MIUI `INSTALL_FAILED_USER_RESTRICTED` install path was handled by the
+  tested push + `pm install -r` fallback; the setup helper has device-free tests
+  for the narrow retry and cleanup behavior.
+
 ### Remaining validation
 
-- Test Android 8 through the latest supported Android release.
+- Test Android 8 through the latest supported Android release beyond the single
+  Android 15 device used here.
 - Test a representative range of Pixel, Samsung, Xiaomi, OnePlus, Motorola, Oppo, Realme, and Vivo devices.
 - Verify screen lock/unlock, service recreation, process-death recovery, and Android 14+ foreground-service behavior on devices.
-- Verify USB permission handling across Android versions.
+- Verify USB debugging reauthorization, SIGKILL/crash recovery, and failure during a large transfer.
+- Verify external IPv6 on a host with a working global IPv6 upstream.
 - Validate AOA permission and accessory handling on real devices.
 
 **Exit condition:** The VPN survives screen lock/unlock and common Android service recreation without requiring an application restart. The implementation includes lifecycle handling, but broad device coverage remains outstanding.

@@ -1,4 +1,4 @@
-.PHONY: help doctor fmt fmt-check test test-go test-integration test-android lint build build-go build-aoa build-android shellcheck check clean
+.PHONY: help doctor fmt fmt-check vet test test-go test-integration test-android test-setup lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
 RELAY_BIN ?= relay-bin
@@ -10,10 +10,12 @@ help:
 	@echo "  make doctor          Check local development prerequisites"
 	@echo "  make fmt             Format Go source files"
 	@echo "  make fmt-check       Verify Go formatting without changing files"
+	@echo "  make vet             Run go vet"
 	@echo "  make test            Run Go and Android tests"
 	@echo "  make test-go         Run Go tests with the race detector"
 	@echo "  make test-integration Run deterministic session/protocol tests"
 	@echo "  make test-android    Run Android unit tests"
+	@echo "  make test-setup      Run device-free setup/install shell tests"
 	@echo "  make lint            Run Android lint"
 	@echo "  make build           Build Go relays and debug APK"
 	@echo "  make build-go        Build the standard Go relay"
@@ -54,16 +56,22 @@ fmt-check:
 
 test: test-go test-android
 
+vet:
+	$(GO) vet ./...
+
 test-go:
 	$(GO) test -race -count=1 -timeout=120s ./...
 
 # Deterministic, non-privileged relay tests. These use pipes/test doubles and
 # never open /dev/net/tun, invoke adb, or change host networking.
 test-integration:
-	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|AdbBackoff)' ./relay -v
+	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|ParseAdbReverseList|Adb|SetupReverse|Poll|NewAdbWatcher|Network|ParseDefaultInterface|Tun|BuildFrame|ReadFrame|WriteFrame|Roundtrip|Config|ConnectionState|Oversized)' ./relay -v
 
 test-android:
 	cd $(ANDROID_DIR) && ./gradlew test --no-daemon --stacktrace
+
+test-setup:
+	bash tests/adb-install-test.sh
 
 lint:
 	cd $(ANDROID_DIR) && ./gradlew lint --no-daemon --stacktrace
@@ -85,10 +93,11 @@ shellcheck:
 	if [ -z "$$scripts" ]; then \
 		echo "No shell scripts found; ShellCheck passed."; \
 	else \
+		bash -n $$scripts; \
 		shellcheck $$scripts; \
 	fi
 
-check: fmt-check test lint build-aoa shellcheck
+check: fmt-check vet test lint build-aoa test-setup shellcheck
 
 clean:
 	rm -f "$(RELAY_BIN)"

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -44,6 +45,11 @@ type session struct {
 	// Initialised by tunToAndroid; accessed by sendPong via fwMu.
 	fw   FrameWriter
 	fwMu sync.Mutex
+
+	// pongPending coalesces PING replies: at most one PONG write is in flight.
+	// Without this, a slow or stalled write would accumulate one goroutine per
+	// PING until the session ends.
+	pongPending atomic.Bool
 }
 
 func newSession(conn net.Conn, tun *TunDevice, cfg Config) *session {
@@ -116,14 +122,21 @@ func (s *session) androidToTun(ctx context.Context, cancel context.CancelFunc) {
 			}
 
 		case MsgPing:
-			// Reply asynchronously so a slow pong doesn't stall the read loop.
-			// A partial frame corrupts the stream, so cancel the session.
-			go func() {
-				if err := s.sendPong(); err != nil {
-					errorf("sendPong: %v", err)
-					cancel()
-				}
-			}()
+			// Reply asynchronously so a slow pong doesn't stall the read loop,
+			// but coalesce replies so a stalled write cannot accumulate one
+			// goroutine per PING. A partial frame corrupts the stream, so
+			// cancel the session if the write fails.
+			if s.pongPending.CompareAndSwap(false, true) {
+				go func() {
+					defer s.pongPending.Store(false)
+					if err := s.sendPong(); err != nil {
+						errorf("sendPong: %v", err)
+						cancel()
+					}
+				}()
+			} else {
+				debugf("androidToTun: PING while a PONG is already pending; reply coalesced")
+			}
 
 		case MsgClose:
 			debugf("androidToTun: CLOSE for conn_id=%d", frame.ConnID)
@@ -168,7 +181,14 @@ func (s *session) tunToAndroid(ctx context.Context, cancel context.CancelFunc) {
 			cancel()
 		})
 	}
-	defer fw.Close()
+	defer func() {
+		// Clear the shared pointer before closing so a late PING cannot send
+		// into a writer owned by a finished session.
+		s.fwMu.Lock()
+		s.fw = nil
+		s.fwMu.Unlock()
+		fw.Close()
+	}()
 
 	// Store fw so sendPong can access it.
 	s.fwMu.Lock()

@@ -5,7 +5,7 @@
 
 Reverse USB tethering for Android: route your Android device's traffic through a Linux PC's Internet connection over USB, without root on the phone.
 
-> **Release status:** OpenTether is in the `v0.9.5` beta series. Use [GitHub Releases](https://github.com/pyd-07/NetcoN-OpenTether/releases) for the latest published prerelease and its matching assets. The project is still undergoing real-device validation. ADB is the recommended test path; AOA remains experimental.
+> **Release status:** OpenTether is in the `v0.9.5` beta series. Use [GitHub Releases](https://github.com/pyd-07/NetcoN-OpenTether/releases) for the latest published prerelease and its matching assets. The ADB baseline passed real-device validation on one POCO C65 running Android 15, but compatibility with other devices and hosts is not established. ADB is the recommended test path; AOA remains experimental and was not validated in this release.
 
 ---
 
@@ -13,11 +13,13 @@ Reverse USB tethering for Android: route your Android device's traffic through a
 
 ### Requirements
 
-- Android 8.0+ (API 26+)
+- Android 8.0+ (API 26+); only Android 15/API 35 has been device-validated so far
 - A USB data cable
-- A Linux PC with Internet access
+- A Linux PC with Internet access and root/`sudo` for the relay's TUN and NAT setup
 - ADB for the recommended transport, or USB/libusb access for experimental AOA
 - `iptables`, `ip6tables`, and `iproute2` on the Linux PC
+- A kernel that exposes `/dev/net/tun`
+- On WSL2, a Windows ADB executable/server that can see the phone (see below)
 
 ### Install a beta release
 
@@ -45,11 +47,27 @@ The release workflow currently builds a **debug APK** intended for beta testing,
 
    The device should appear as `device`, not `unauthorized` or `offline`.
 
-4. Install the APK downloaded from that same release:
+4. Install the APK downloaded from that same release, using the same ADB
+   executable/server that sees the phone:
 
    ```bash
    adb install -r /path/to/OpenTether-<tag>-android.apk
    ```
+
+   On the tested MIUI device this failed with
+   `INSTALL_FAILED_USER_RESTRICTED`. The setup helper retries only that exact
+   restriction with a unique temporary device-side APK and `pm install -r`:
+
+   ```text
+   adb push <apk> /data/local/tmp/opentether-<unique>.apk
+   adb shell pm install -r /data/local/tmp/opentether-<unique>.apk
+   adb shell rm -f /data/local/tmp/opentether-<unique>.apk
+   ```
+
+   The fallback does not bypass Android security, use root on the phone, or
+   approve prompts. If the device rejects it too, install the APK manually or
+   review the OEM's authorized developer-install setting. Unrelated install
+   failures are reported directly and do not trigger the fallback.
 
 5. Start the matching Linux relay as root:
 
@@ -59,6 +77,29 @@ The release workflow currently builds a **debug APK** intended for beta testing,
 
 6. Open OpenTether on Android, grant VPN permission if prompted, and tap **Connect** on Home.
 7. Verify actual connectivity through the Linux host. A successful build, a visible ADB device, or a reverse mapping alone does not prove that Internet traffic works.
+
+### Stop and clean up
+
+1. Tap **Disconnect** in OpenTether and wait for the VPN/service to stop.
+2. In the relay terminal, press **Ctrl+C** once and wait for `shutdown complete`.
+   Do not use `SIGKILL`/`kill -9`; in-process cleanup cannot run after SIGKILL.
+3. Confirm the host was restored:
+
+   ```bash
+   ip link show ot0
+   ip route show
+   iptables -S
+   iptables -t nat -S
+   ip6tables -S
+   ip6tables -t nat -S
+   adb reverse --list
+   ss -lntp | grep 8765 || true
+   ```
+
+   Expected: `ot0` is gone, the relay's owned rules/routes are removed,
+   `adb reverse --list` no longer shows the mapping created by this run, and
+   nothing is listening on port 8765. The relay listener must stay on
+   `127.0.0.1:8765`; never expose it on the LAN.
 
 The relay normally configures `adb reverse tcp:8765 tcp:8765` automatically. If you use `--no-adb-watch`, configure and verify the mapping in the same ADB context that owns the device:
 
@@ -77,13 +118,26 @@ The [ADB integration validation guide](docs/adb-integration.md) describes the st
 
 In WSL2, the Linux ADB server may not see a phone connected to Windows. If Windows `adb.exe` can see the device but Linux `adb devices` is empty, configure the relay watcher to use the Windows ADB executable and the server port that owns the device.
 
-Example (replace the path with the actual location on your machine):
+Example for the relay:
 
 ```bash
 sudo ./relay-bin \
   --adb-bin "/mnt/c/Users/<user>/.../platform-tools/adb.exe" \
   --adb-port 5038
 ```
+
+Example for the setup script:
+
+```bash
+sudo ./setup.sh \
+  --adb-bin "/mnt/c/Users/<user>/.../platform-tools/adb.exe" \
+  --adb-port 5038
+```
+
+The setup script uses the selected executable and port for `adb devices`,
+installation, reverse setup, cleanup, and the relay invocation. Do not mix a
+Windows ADB server on port 5038 with the Linux ADB server on the default port
+5037 for different steps.
 
 - `--adb-bin` selects the ADB executable used by automatic reverse setup. The default is `adb` from `PATH`.
 - `--adb-port` selects the ADB server port. The default `0` preserves the ADB client's default-port behavior; set a nonzero value such as `5038` when that is the server that sees your phone.
@@ -99,7 +153,7 @@ An empty device list on one ADB server does not mean the phone is disconnected f
 
 ### AOA mode — experimental
 
-AOA (Android Open Accessory) is intended to provide direct USB transport without persistent USB debugging. Its release path and physical-device behavior are still being validated, so use ADB for baseline testing.
+AOA (Android Open Accessory) is intended to provide direct USB transport without persistent USB debugging. It is **not part of the v0.9.5 validated baseline**: accessory negotiation, permission prompts, and real USB bulk transfers were not tested. Use ADB for baseline testing and do not treat the AOA assets as validated support.
 
 For a source build, AOA mode must be explicitly selected; building with `-tags aoa` alone does not turn it on:
 
@@ -121,7 +175,19 @@ cd NetcoN-OpenTether
 sudo ./setup.sh
 ```
 
-For the AOA setup path:
+To build and install without starting the privileged relay:
+
+```bash
+sudo ./setup.sh --build-only
+```
+
+On WSL, pass the Windows ADB executable and server port selected above:
+
+```bash
+sudo ./setup.sh --adb-bin "/mnt/c/Users/<user>/.../platform-tools/adb.exe" --adb-port 5038
+```
+
+For the AOA setup path (experimental, not validated):
 
 ```bash
 sudo ./setup.sh --aoa
@@ -139,8 +205,9 @@ The `v0.9.5` beta series combines relay hardening, Android lifecycle/session-sta
 
 ### Recent changes
 
-- **Relay validation and transport safety:** validate tunnel/listener configuration before changing host networking, detect short writes across transport and buffered paths, tighten session cancellation/cleanup, and improve AOA string/filter compatibility.
-- **ADB/session startup:** distinguish fatal startup errors from runtime reconnect errors, extract deterministic device-state parsing and bounded reverse-setup backoff, and expand relay and Android lifecycle tests.
+- **ADB baseline hardening:** track reverse-mapping ownership per device and remove only mappings the watcher created, bound every watcher-owned `adb` command with a timeout, wait for in-flight setup at shutdown, and make session handling last-connection-wins so a wedged session cannot block reconnect.
+- **Networking and transport safety:** roll back partially created host networking resources, restore only sysctls this run changed, scope firewall rules, report incomplete cleanup, use an exclusive TUN interface, flush buffered frames on writer close, and coalesce PONG replies.
+- **Android reconnect/startup recovery:** replace fd/protect busy loops with bounded 2s→30s backoff, shut sockets down before closing, bound session-cleanup joins, reset the session clock on reconnect, and surface foreground-service start/stop failures instead of leaving the UI stuck.
 - **Connection-first Android UI:** reduce the main navigation to Home and Docs, show explicit connection states and the relevant primary action, add connection settings and troubleshooting guidance, and remove obsolete screens/components.
 - **Configurable ADB for WSL:** add `--adb-bin` and `--adb-port` so automatic reverse mapping can target a non-default ADB server, with diagnostics for repeated empty device discovery and focused watcher/configuration tests.
 
@@ -152,18 +219,37 @@ The repository includes automated Go tests, race-enabled tests, vet/lint checks,
 
 Automated and mock integration tests do **not** open a real TUN device, configure host routing/NAT, perform USB accessory negotiation, or prove end-to-end Internet connectivity. Passing them does not establish that the VPN works on every Android device.
 
-A manual ADB run on 2026-10-20 established the reverse/control path, the app-owned relay session, PING/PONG, the VPN/TUN data path, and cleanup that restored the host networking baseline. Traffic was observed after the VPN had been started manually. That run did not complete the full validation matrix.
+### Device validation for v0.9.5
 
-Still outstanding or requiring additional device/host coverage:
+On 2026-10-21, the ADB baseline passed on a POCO C65 (`2310FPCA4I`) running
+Android 15/API 35, with a WSL2 Debian host and Windows ADB 37.0.1 on server port
+5038. The tested path covered relay startup, ADB reverse mapping, VPN/TUN, host
+NAT, IPv4, DNS, HTTPS, an approximately 10 MB transfer, app restart, relay
+restart, USB reconnect, post-recovery traffic, and clean shutdown/cleanup.
+During relay downtime the UI showed **Waiting for your computer**; the app
+retried at 2s→4s→8s→16s→30s and reconnected automatically after the relay
+restarted and after USB reconnect.
 
-- Deliberate IPv4, DNS, HTTPS, and large-transfer tests
-- IPv6 forwarding and upstream compatibility
-- Disconnect/reconnect and relay-restart recovery under test
-- Broad Android-version and OEM coverage
-- AOA accessory negotiation, permission prompts, and real USB bulk transfers
-- Full end-to-end connectivity validation across supported Linux hosts
+The Android-local IPv6 TUN path (`fdcc::1` ↔ `fdcc::2`) passed. External IPv6
+was blocked because the host had no global IPv6 address or default route, so
+this release does not claim external IPv6 support. The documented
+`adb install -r` path failed on this MIUI build with
+`INSTALL_FAILED_USER_RESTRICTED`; push + `pm install -r` succeeded, and the
+setup helper now implements that narrowly gated fallback.
 
-ADB remains the recommended baseline until the outstanding cases have been verified. See [`docs/adb-integration.md`](docs/adb-integration.md) for the staged procedure and evidence requirements.
+Not validated in this release:
+
+- SIGKILL/crash recovery; only clean SIGTERM/Ctrl+C shutdown is supported
+- USB debugging reauthorization
+- Relay failure during a deliberate large transfer
+- AOA accessory negotiation, permission prompts, or bulk transfers
+- Other OEMs, Android versions, Linux hosts, and ADB device/server topologies
+- External IPv6 DNS/HTTPS
+
+These results apply only to the tested device and WSL/Windows-ADB topology.
+ADB remains the recommended baseline. See
+[`docs/adb-integration.md`](docs/adb-integration.md) for the staged procedure,
+expected observations, limitations, and evidence requirements.
 
 ---
 
@@ -182,9 +268,11 @@ Common commands:
 ```bash
 make fmt
 make fmt-check
+make vet
 make test
 make test-go
 make test-integration
+make test-setup
 make test-android
 make lint
 make build
@@ -219,7 +307,7 @@ go build -tags aoa -o relay-bin .
 
 ### Release artifacts
 
-Pushing a version tag matching `v*` triggers the release workflow. For example, tags such as `v0.9.5-beta.3` cause the workflow to:
+Pushing a version tag matching `v*` triggers the release workflow. For example, a tag such as `v0.9.5` causes the workflow to:
 
 1. Run Go tests and build the standard and AOA relay variants.
 2. Build the Android debug APK.

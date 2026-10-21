@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 )
 
@@ -18,6 +19,10 @@ type Server struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	state    *ConnectionStateTracker
+
+	// adbWG tracks the ADB watcher so shutdown can wait for its reverse-mapping
+	// cleanup before the process exits.
+	adbWG sync.WaitGroup
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -63,16 +68,40 @@ func NewServer(cfg Config) (*Server, error) {
 
 func (s *Server) Run() error {
 	defer s.cleanup()
+	// Wait for the watcher (and any in-flight reverse setup) before network
+	// cleanup. Defers run LIFO, so this executes before cleanup.
+	defer s.adbWG.Wait()
 
 	if !s.cfg.DisableAdbWatch {
 		port := listenPort(s.cfg.ListenAddr)
 		watcher := NewAdbWatcher(port, s.cfg.AdbBin, s.cfg.AdbPort)
-		go watcher.Watch(s.ctx)
+		s.adbWG.Add(1)
+		go func() {
+			defer s.adbWG.Done()
+			watcher.Watch(s.ctx)
+		}()
 		logf("ADB watcher started — automatic device detection and reconnect enabled")
 	}
 
 	s.state.Set(StateDisconnected)
 	logf("ready — waiting for Android on %s", s.cfg.ListenAddr)
+	return s.serve()
+}
+
+// serve accepts Android connections and owns at most one live session. A new
+// connection replaces an existing one: the Android client opens a new TCP
+// connection only after its previous transport failed, so a half-open or
+// wedged session must not block reconnection forever.
+func (s *Server) serve() error {
+	var active *session
+	var activeDone chan struct{}
+
+	defer func() {
+		if active != nil && activeDone != nil {
+			active.conn.Close()
+			<-activeDone
+		}
+	}()
 
 	for {
 		conn, err := s.listener.Accept()
@@ -94,12 +123,28 @@ func (s *Server) Run() error {
 			}
 		}
 
+		if active != nil {
+			warnf("new Android connection from %s — replacing previous session from %s",
+				conn.RemoteAddr(), active.conn.RemoteAddr())
+			active.conn.Close()
+			<-activeDone
+			active = nil
+			activeDone = nil
+		}
+
 		s.state.Set(StateConnected)
 		logf("Android connected from %s — session starting", conn.RemoteAddr())
+
 		sess := newSession(conn, s.tun, s.cfg)
-		sess.run(s.ctx)
-		s.state.Set(StateDisconnected)
-		logf("Android session ended — waiting for reconnect")
+		done := make(chan struct{})
+		active = sess
+		activeDone = done
+		go func() {
+			defer close(done)
+			sess.run(s.ctx)
+			s.state.Set(StateDisconnected)
+			logf("Android session ended — waiting for reconnect")
+		}()
 	}
 }
 
@@ -117,7 +162,11 @@ func (s *Server) Stop() {
 func (s *Server) cleanup() {
 	s.state.Set(StateStopping)
 	logf("removing iptables rules and routes...")
-	s.netSetup.Cleanup()
+	if s.netSetup != nil {
+		if err := s.netSetup.CleanupErr(); err != nil {
+			errorf("network cleanup incomplete: %v", err)
+		}
+	}
 	if err := s.tun.Close(); err != nil {
 		debugf("TUN close: %v", err)
 	}
