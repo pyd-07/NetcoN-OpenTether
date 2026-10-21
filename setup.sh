@@ -129,6 +129,8 @@ if $need_go; then
     *)     error "Unsupported architecture: $ARCH — install Go manually from https://go.dev/dl/" ;;
   esac
   info "Downloading Go ${GO_VERSION} (${GO_ARCH})..."
+  # Replace the previous upstream installation cleanly to avoid stale files.
+  rm -rf /usr/local/go
   curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
     | tar -C /usr/local -xz
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
