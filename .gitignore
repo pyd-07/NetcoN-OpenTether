@@ -11,8 +11,6 @@
 relay-linux-*
 OpenTether-*
 opentether-*
-relay/opentether
-relay/mock_android
 *.exe
 *.out
 
@@ -131,3 +129,8 @@ coverage/
 # ── USB / AOA build artifacts ─────────────────────────────────────────────────
 # libusb pkg-config cache (generated on first build with -tags aoa)
 pkg-config-cache/
+
+# ── Local working notes ───────────────────────────────────────────────────────
+# Private analysis/evidence directories that are never published.
+/agent-context/
+/evidence/

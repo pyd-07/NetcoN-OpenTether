@@ -14,7 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.opentether.Constants
 import com.opentether.MainActivity
-import com.opentether.StatsHolder
+import com.opentether.stats.StatsHolder
 import com.opentether.data.AppPreferences
 import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger

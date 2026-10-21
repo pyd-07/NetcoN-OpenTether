@@ -11,7 +11,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import com.opentether.Constants
-import com.opentether.StatsHolder
+import com.opentether.stats.StatsHolder
 import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger
 import com.opentether.model.OtpFrame

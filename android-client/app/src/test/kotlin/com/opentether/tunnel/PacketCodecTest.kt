@@ -57,7 +57,7 @@ class PacketCodecTest {
 
     // 65_535 is the Go relay's MaxPayloadSize and 0x0000FFFF is the largest
     // payload_length the decoder accepts. The literal header matches
-    // relay/protocol_golden_test.go.
+    // internal/protocol/protocol_golden_test.go.
     @Test
     fun encodeMaxPayload() {
         val payload = ByteArray(MAX_PAYLOAD) { 0xAB.toByte() }

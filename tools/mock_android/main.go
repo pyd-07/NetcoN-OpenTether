@@ -10,11 +10,8 @@ import (
 	"log"
 	"net"
 	"time"
-)
 
-const (
-	frameHeaderSize       = 12
-	msgData         uint8 = 0x01
+	"github.com/pyd-07/opentether/internal/protocol"
 )
 
 func main() {
@@ -30,53 +27,22 @@ func main() {
 	log.Printf("sending %d-byte DNS query packet", len(pkt))
 
 	// Wrap in OTP frame
-	if err := writeFrame(conn, 1001, msgData, pkt); err != nil {
+	frame := protocol.Frame{ConnID: 1001, MsgType: protocol.MsgData, Payload: pkt}
+	if err := protocol.WriteFrame(conn, frame); err != nil {
 		log.Fatalf("send frame: %v", err)
 	}
 
 	// Wait for response
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	hdr := make([]byte, frameHeaderSize)
-	if _, err := readFull(conn, hdr); err != nil {
-		log.Fatalf("read response header: %v", err)
+	resp, err := protocol.ReadFrame(conn)
+	if err != nil {
+		log.Fatalf("read response: %v", err)
 	}
-	payLen := binary.BigEndian.Uint32(hdr[4:8])
-	msgType := hdr[8]
-	payload := make([]byte, payLen)
-	if payLen > 0 {
-		if _, err := readFull(conn, payload); err != nil {
-			log.Fatalf("read response payload: %v", err)
-		}
-	}
-	log.Printf("got frame: type=0x%02x payload=%d bytes", msgType, len(payload))
-	if msgType == msgData && len(payload) > 0 {
-		log.Printf("first 40 bytes of IP response: %x", payload[:min(40, len(payload))])
+	log.Printf("got frame: type=0x%02x payload=%d bytes", resp.MsgType, len(resp.Payload))
+	if resp.MsgType == protocol.MsgData && len(resp.Payload) > 0 {
+		log.Printf("first 40 bytes of IP response: %x", resp.Payload[:min(40, len(resp.Payload))])
 		log.Println("SUCCESS — relay is forwarding packets")
 	}
-}
-
-func writeFrame(conn net.Conn, connID uint32, msgType uint8, payload []byte) error {
-	hdr := make([]byte, frameHeaderSize)
-	binary.BigEndian.PutUint32(hdr[0:4], connID)
-	binary.BigEndian.PutUint32(hdr[4:8], uint32(len(payload)))
-	hdr[8] = msgType
-	if _, err := conn.Write(hdr); err != nil {
-		return err
-	}
-	_, err := conn.Write(payload)
-	return err
-}
-
-func readFull(conn net.Conn, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := conn.Read(buf[total:])
-		total += n
-		if err != nil {
-			return total, err
-		}
-	}
-	return total, nil
 }
 
 // buildDNSPacket constructs a raw IPv4/UDP packet containing a DNS query
@@ -137,11 +103,4 @@ func ipChecksum(hdr []byte) uint16 {
 		sum = (sum & 0xffff) + (sum >> 16)
 	}
 	return ^uint16(sum)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

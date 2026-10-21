@@ -2,7 +2,7 @@ package com.opentether.vpn
 
 import android.util.Log
 import com.opentether.Constants
-import com.opentether.StatsHolder
+import com.opentether.stats.StatsHolder
 import com.opentether.logging.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

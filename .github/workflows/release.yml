@@ -149,10 +149,10 @@ jobs:
             OpenTether-${GITHUB_REF_NAME}-android.apk
 
       - name: Build Linux relay — amd64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-amd64 .
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-amd64 ./cmd/opentether
 
       - name: Build Linux relay — arm64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-arm64 .
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o OpenTether-${GITHUB_REF_NAME}-linux-arm64 ./cmd/opentether
 
       - name: Install libusb for AOA build
         run: |
@@ -160,7 +160,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libusb-1.0-0-dev
 
       - name: Build Linux AOA relay — amd64
-        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -tags aoa -o OpenTether-${GITHUB_REF_NAME}-linux-amd64-aoa .
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -tags aoa -o OpenTether-${GITHUB_REF_NAME}-linux-amd64-aoa ./cmd/opentether
 
       - name: Generate checksums
         run: sha256sum OpenTether-${GITHUB_REF_NAME}-* > OpenTether-${GITHUB_REF_NAME}-SHA256SUMS.txt

@@ -5,7 +5,7 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import com.opentether.Constants
-import com.opentether.StatsHolder
+import com.opentether.stats.StatsHolder
 import com.opentether.data.TunnelTransport
 import com.opentether.logging.AppLogger
 import com.opentether.model.OtpFrame
