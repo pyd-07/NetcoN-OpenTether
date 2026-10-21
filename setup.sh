@@ -129,10 +129,14 @@ if $need_go; then
     *)     error "Unsupported architecture: $ARCH — install Go manually from https://go.dev/dl/" ;;
   esac
   info "Downloading Go ${GO_VERSION} (${GO_ARCH})..."
-  # Replace the previous upstream installation cleanly to avoid stale files.
+  # Download first so a transient network failure does not remove the
+  # currently working Go installation.
+  GO_TARBALL="$(mktemp)"
+  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o "$GO_TARBALL" \
+    || { rm -f "$GO_TARBALL"; error "Failed to download Go. Check network access and retry."; }
   rm -rf /usr/local/go
-  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
-    | tar -C /usr/local -xz
+  tar -C /usr/local -xzf "$GO_TARBALL"
+  rm -f "$GO_TARBALL"
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
   info "Go ${GO_VERSION} installed"
 fi
