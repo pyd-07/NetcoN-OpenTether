@@ -289,7 +289,9 @@ cleanup() {
   info "Tap 'Stop VPN' on the phone if still active."
   echo ""
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Do not exec here: replacing the shell would discard its EXIT trap and
 # leave the ADB reverse mapping behind. The relay handles its own networking
