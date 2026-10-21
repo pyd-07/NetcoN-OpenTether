@@ -139,8 +139,9 @@ The `v0.9.5` beta series combines relay hardening, Android lifecycle/session-sta
 
 ### Recent changes
 
-- **Relay validation and transport safety:** validate tunnel/listener configuration before changing host networking, detect short writes across transport and buffered paths, tighten session cancellation/cleanup, and improve AOA string/filter compatibility.
-- **ADB/session startup:** distinguish fatal startup errors from runtime reconnect errors, extract deterministic device-state parsing and bounded reverse-setup backoff, and expand relay and Android lifecycle tests.
+- **ADB baseline hardening:** track reverse-mapping ownership per device and remove only mappings the watcher created, bound every watcher-owned `adb` command with a timeout, wait for in-flight setup at shutdown, and make session handling last-connection-wins so a wedged session cannot block reconnect.
+- **Networking and transport safety:** roll back partially created host networking resources, restore only sysctls this run changed, scope firewall rules, report incomplete cleanup, use an exclusive TUN interface, flush buffered frames on writer close, and coalesce PONG replies.
+- **Android reconnect/startup recovery:** replace fd/protect busy loops with bounded 2s→30s backoff, shut sockets down before closing, bound session-cleanup joins, reset the session clock on reconnect, and surface foreground-service start/stop failures instead of leaving the UI stuck.
 - **Connection-first Android UI:** reduce the main navigation to Home and Docs, show explicit connection states and the relevant primary action, add connection settings and troubleshooting guidance, and remove obsolete screens/components.
 - **Configurable ADB for WSL:** add `--adb-bin` and `--adb-port` so automatic reverse mapping can target a non-default ADB server, with diagnostics for repeated empty device discovery and focused watcher/configuration tests.
 
@@ -153,6 +154,8 @@ The repository includes automated Go tests, race-enabled tests, vet/lint checks,
 Automated and mock integration tests do **not** open a real TUN device, configure host routing/NAT, perform USB accessory negotiation, or prove end-to-end Internet connectivity. Passing them does not establish that the VPN works on every Android device.
 
 A manual ADB run on 2026-10-20 established the reverse/control path, the app-owned relay session, PING/PONG, the VPN/TUN data path, and cleanup that restored the host networking baseline. Traffic was observed after the VPN had been started manually. That run did not complete the full validation matrix.
+
+A 2026-10-21 hardening pass added automated coverage for reverse-mapping ownership/cleanup, watcher command timeouts, session preemption, pong coalescing, writer close-flush, transactional network setup and rollback, sysctl restoration, reconnect backoff, and reconnect state reset. No physical device was attached during that pass, so device discovery, reverse forwarding, real traffic, USB replug, relay restart, and privileged cleanup remain **BLOCKED**, not passed.
 
 Still outstanding or requiring additional device/host coverage:
 
@@ -182,6 +185,7 @@ Common commands:
 ```bash
 make fmt
 make fmt-check
+make vet
 make test
 make test-go
 make test-integration

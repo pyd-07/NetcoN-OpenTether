@@ -58,7 +58,7 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 -timeout=120s ./...
 
       - name: Build standard relay
         run: go build -trimpath -buildvcs=true ./...
@@ -141,6 +141,7 @@ jobs:
             echo 'No shell scripts changed; ShellCheck passed.'
             exit 0
           fi
+          bash -n "${scripts[@]}"
           shellcheck "${scripts[@]}"
 
   dependency-review:

@@ -2,13 +2,14 @@
 
 This guide is the manual, staged procedure for validating the primary ADB
 transport on a Linux host with an authorized Android device. It is a procedure,
-not evidence that every stage has been executed. The 2026-10-20 local automated
-sprint ran only non-privileged builds and unit tests. A separate manual ADB run
-established the reverse transport, the app-owned relay control session,
-PING/PONG, the VPN/TUN data path, and cleanup that restored the host networking
-baseline; real background traffic was observed after the VPN was started
-manually. Deliberate DNS/HTTP(S)/large-transfer, IPv6, reconnect, and full
-end-to-end validation remain outstanding.
+not evidence that every stage has been executed. The 2026-10-21 hardening pass
+ran only non-privileged builds, unit tests, lint, and a debug build; no physical
+device was attached, so every manual stage below remains unexecuted. A separate
+manual ADB run on 2026-10-20 established the reverse transport, the app-owned
+relay control session, PING/PONG, the VPN/TUN data path, and cleanup that
+restored the host networking baseline; real background traffic was observed
+after the VPN was started manually. Deliberate DNS/HTTP(S)/large-transfer, IPv6,
+reconnect, and full end-to-end validation remain outstanding.
 
 ## 1. Safety and authorization
 
@@ -73,6 +74,8 @@ make test-integration
 make shellcheck
 bash -n setup.sh
 ( cd android-client && ./gradlew testDebugUnitTest --no-daemon )
+( cd android-client && ./gradlew lint --no-daemon )
+( cd android-client && ./gradlew assembleDebug --no-daemon )
 make build-go
 ```
 
@@ -80,10 +83,13 @@ Expected artifact: `./relay-bin` from `make build-go`. The Android debug APK, if
 built with `make build-android`, is under
 `android-client/app/build/outputs/apk/debug/`.
 
-`make test-integration` is a focused, deterministic relay test target. It does
-not open `/dev/net/tun`, invoke `adb`, or change host networking. The full
-`go test` command remains the authoritative Go check because it includes the
-same tests plus the rest of the package.
+`make test-integration` is a focused, deterministic relay test target covering
+session/framing, writer lifecycle, ADB device/reverse ownership, host-network
+setup rollback, and config validation. It does not open `/dev/net/tun`, invoke a
+real `adb`, or change host networking: the ADB and networking layers are tested
+through injectable command runners and sysctl seams. The full `go test` command
+remains the authoritative Go check because it includes the same tests plus the
+rest of the package.
 
 AOA compilation is not part of this procedure. If `pkg-config --exists
 libusb-1.0` fails, do not install packages just to make an AOA build pass.
@@ -167,6 +173,13 @@ A `ready — waiting` line without a subsequent `Android connected` line means t
 listener is up but the device has not reached it. Check `adb reverse --list`,
 the app's VPN state, and whether the relay and `adb` are in the same
 authorization context.
+
+The watcher only owns a mapping it observed absent and then created. If the
+mapping already exists, the log says `reverse tunnel already present … (not
+owned by relay)` and shutdown leaves it in place. If the watcher created the
+mapping, shutdown removes it. Session handling is last-connection-wins: a new
+Android TCP connection closes the previous session instead of waiting for a
+wedged one to end. This is intentional; only one Android session is supported.
 
 The listener is loopback-only. Do not change `--listen` to a LAN/wildcard
 address for this test.
@@ -274,11 +287,26 @@ Run these one at a time and record the observed state:
    it. Check for stale routes, stale reverse mappings, or a UI stuck in
    `Starting`/`Connecting`.
 
-Current implementation risks to watch for (static review, not yet confirmed on a
-device): the session accepts one connection at a time, has no read/idle deadline,
-`FlushWriter.Close` can drop buffered frames, network setup is not fully
-transactional on partial failure, and the ADB watcher does not remove its
-`adb reverse` mapping during shutdown. Record which of these actually reproduces.
+Current implementation behaviour to watch for (static review plus automated
+tests; not yet confirmed on a device):
+
+- A new Android TCP connection preempts the previous session.
+- There is no application-level read/idle deadline. The client sends PINGs every
+  2s, but Doze/network suspension can pause them; adding a hard deadline without
+  protocol changes would risk disconnecting healthy sessions. A half-open
+  session is therefore cleared by the client's reconnect (last-connection-wins)
+  rather than by a relay-side timer.
+- `FlushWriter.Close` now performs a best-effort final flush; a failed flush is
+  logged at debug level because the stream is usually already gone.
+- Host network setup rolls back resources it created on partial failure. A
+  failed rollback is reported as `network cleanup incomplete` and by
+  `CleanupErr`; it is not silently discarded.
+- The ADB watcher waits for in-flight reverse setup and removes only mappings it
+  created, with a bounded shutdown timeout.
+- Android reconnect uses 2s→4s→8s→16s→30s backoff, and a reconnect resets the
+  session start time instead of inheriting the previous session's clock.
+
+Record which behaviours actually reproduce on the device.
 
 ## 11. Stage 8 — cleanup audit
 
@@ -299,8 +327,12 @@ adb reverse --list
 ```
 
 Expected: the relay reports removal of its rules/routes, `ot0` is gone, and the
-relay's rules are no longer present. An `adb reverse` entry may remain; remove it
-manually only after confirming it is the test mapping and after authorization:
+relay's rules are no longer present. A reverse mapping created by the watcher is
+removed by the watcher during shutdown. A mapping that pre-existed is not owned
+by the watcher and is left in place; `setup.sh` removes a mapping only when that
+run created it (and re-checks `adb reverse --list` first), never adopting a
+pre-existing mapping. If an entry remains, remove it manually only after
+confirming it is the test mapping and after authorization:
 
 ```bash
 adb reverse --remove tcp:8765
@@ -350,16 +382,24 @@ include raw `adb devices -l` or full `adb logcat` output without review.
   restoring the host networking baseline; real background traffic was observed
   after the VPN was started manually. Deliberate DNS/HTTP(S)/large-transfer,
   IPv6, reconnect, and full end-to-end validation remain outstanding.
+- The 2026-10-21 hardening pass added automated coverage for reverse-mapping
+  ownership, partial-network-setup rollback, sysctl restoration, pong
+  coalescing, writer close-flush, session preemption, reconnect backoff, and
+  reconnect state reset. Those changes are not evidence of device behaviour.
+- No physical device was attached during the hardening pass. Device discovery,
+  authorization, reverse mapping (including WSL/Windows ADB), real traffic,
+  USB replug, relay restart, and privileged cleanup are **BLOCKED**, not passed.
 - AOA is experimental. The relay sends accessory version `1`; APKs built against
   the older `1.0` filter will not match. AOA builds require libusb metadata.
 - The relay listener is loopback-only but unauthenticated; local processes can
   inject frames.
-- The relay and Android client have retry logic, but bounded reconnect behavior
-  still needs device validation. Cleanup restored the host networking baseline
-  in the 2026-10-20 manual run.
+- The relay and Android client have bounded retry/backoff logic. A reconnect
+  creates a new session clock on the Android side; the relay still preempts the
+  previous Android connection rather than multiplexing sessions.
 - The Android side has static-review risks around foreground-service types,
-  notification permission, and retry loops on fd/protect failures; these require
-  device confirmation and are not claimed fixed here.
+  notification permission, and retry loops on fd/protect failures; the fd/protect
+  busy loop is fixed, but these require device confirmation and are not claimed
+  fully fixed here.
 - A passing mock test proves only the tested protocol/session seam. Use the
   staged procedure above for real-device evidence.
 

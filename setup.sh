@@ -20,6 +20,11 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+# Tracks whether this script created the ADB reverse mapping. Cleanup removes
+# the mapping only when this remains true.
+REVERSE_OWNED=false
+DEVICE=""
+
 info()    { echo -e "${GREEN}[✔]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[✘]${NC} $1"; exit 1; }
@@ -236,9 +241,9 @@ fi
 section "Installing app on device"
 
 if ! $USE_AOA; then
-  adb install -r "$APK_NAME" \
+  adb -s "$DEVICE" install -r "$APK_NAME" \
     && info "App installed on $DEVICE" \
-    || error "ADB install failed — try manually:  adb install -r $APK_NAME"
+    || error "ADB install failed — try manually:  adb -s $DEVICE install -r $APK_NAME"
 else
   warn "AOA mode — you need ADB once to install the APK (USB debugging required just for this):"
   warn "  adb install -r $APK_NAME"
@@ -250,16 +255,23 @@ if ! $USE_AOA; then
   section "Setting up ADB reverse tunnel"
   # The relay watches for devices and re-runs this on reconnect automatically,
   # but running it now means the very first connection works immediately.
-  adb reverse tcp:8765 tcp:8765 \
-    && info "ADB reverse tunnel active  (phone:8765 → PC:8765)" \
-    || warn "adb reverse failed — relay will retry automatically when phone reconnects"
+  # A mapping that already exists is reused but never adopted, so this script
+  # cannot remove a tunnel another process owns.
+  if adb -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
+    info "ADB reverse tunnel already present for $DEVICE (leaving ownership alone)"
+  elif adb -s "$DEVICE" reverse tcp:8765 tcp:8765; then
+    REVERSE_OWNED=true
+    info "ADB reverse tunnel active  (phone:8765 → PC:8765)"
+  else
+    warn "adb reverse failed — relay will retry automatically when phone reconnects"
+  fi
 fi
 
 # ── 9. Launch app ─────────────────────────────────────────────────────────────
 section "Launching app"
 
 if ! $USE_AOA; then
-  adb shell am start -n com.opentether/.MainActivity &>/dev/null \
+  adb -s "$DEVICE" shell am start -n com.opentether/.MainActivity &>/dev/null \
     && info "OpenTether launched on device" \
     || warn "Auto-launch failed — open OpenTether manually on the phone"
   echo ""
@@ -288,8 +300,12 @@ echo ""
 cleanup() {
   echo ""
   section "Shutting down"
-  if ! $USE_AOA; then
-    adb reverse --remove tcp:8765 2>/dev/null && info "ADB tunnel removed" || true
+  if ! $USE_AOA && [[ "$REVERSE_OWNED" == true && -n "$DEVICE" ]]; then
+    if adb -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
+      adb -s "$DEVICE" reverse --remove tcp:8765 2>/dev/null \
+        && info "ADB tunnel removed" \
+        || warn "Could not remove ADB tunnel for $DEVICE"
+    fi
   fi
   info "iptables rules will be removed by the relay process on exit."
   info "Tap 'Stop VPN' on the phone if still active."

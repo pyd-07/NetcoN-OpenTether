@@ -1,4 +1,4 @@
-.PHONY: help doctor fmt fmt-check test test-go test-integration test-android lint build build-go build-aoa build-android shellcheck check clean
+.PHONY: help doctor fmt fmt-check vet test test-go test-integration test-android lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
 RELAY_BIN ?= relay-bin
@@ -10,6 +10,7 @@ help:
 	@echo "  make doctor          Check local development prerequisites"
 	@echo "  make fmt             Format Go source files"
 	@echo "  make fmt-check       Verify Go formatting without changing files"
+	@echo "  make vet             Run go vet"
 	@echo "  make test            Run Go and Android tests"
 	@echo "  make test-go         Run Go tests with the race detector"
 	@echo "  make test-integration Run deterministic session/protocol tests"
@@ -54,13 +55,16 @@ fmt-check:
 
 test: test-go test-android
 
+vet:
+	$(GO) vet ./...
+
 test-go:
 	$(GO) test -race -count=1 -timeout=120s ./...
 
 # Deterministic, non-privileged relay tests. These use pipes/test doubles and
 # never open /dev/net/tun, invoke adb, or change host networking.
 test-integration:
-	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|AdbBackoff)' ./relay -v
+	$(GO) test -race -count=1 -timeout=120s -run 'Test(Session|DirectWriter|FlushWriter|ListenPort|ParseAdbDevices|ParseAdbReverseList|Adb|SetupReverse|Poll|NewAdbWatcher|Network|ParseDefaultInterface|Tun|BuildFrame|ReadFrame|WriteFrame|Roundtrip|Config|ConnectionState|Oversized)' ./relay -v
 
 test-android:
 	cd $(ANDROID_DIR) && ./gradlew test --no-daemon --stacktrace
@@ -85,10 +89,11 @@ shellcheck:
 	if [ -z "$$scripts" ]; then \
 		echo "No shell scripts found; ShellCheck passed."; \
 	else \
+		bash -n $$scripts; \
 		shellcheck $$scripts; \
 	fi
 
-check: fmt-check test lint build-aoa shellcheck
+check: fmt-check vet test lint build-aoa shellcheck
 
 clean:
 	rm -f "$(RELAY_BIN)"
