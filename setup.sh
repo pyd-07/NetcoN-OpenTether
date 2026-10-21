@@ -87,7 +87,7 @@ install_if_missing() {
 
 install_if_missing iptables  iptables
 install_if_missing ip        iproute2
-install_if_missing java      default-jdk
+install_if_missing java      openjdk-17-jdk
 
 if ! $USE_AOA; then
   install_if_missing adb adb
@@ -105,13 +105,13 @@ if $USE_AOA; then
 fi
 
 # Go: install from upstream if missing or below minimum required version
-GO_MIN="1.22"
+GO_MIN="1.25.0"
 need_go=false
 if ! command -v go &>/dev/null; then
   need_go=true
   warn "Go not found"
 else
-  GO_CURRENT=$(go version | grep -oP '\d+\.\d+' | head -1)
+  GO_CURRENT=$(go version | sed -E 's/.* go([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
   if [[ "$(printf '%s\n' "$GO_MIN" "$GO_CURRENT" | sort -V | head -1)" != "$GO_MIN" ]]; then
     warn "Go $GO_CURRENT is older than required $GO_MIN — upgrading"
     need_go=true
@@ -129,8 +129,14 @@ if $need_go; then
     *)     error "Unsupported architecture: $ARCH — install Go manually from https://go.dev/dl/" ;;
   esac
   info "Downloading Go ${GO_VERSION} (${GO_ARCH})..."
-  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
-    | tar -C /usr/local -xz
+  # Download first so a transient network failure does not remove the
+  # currently working Go installation.
+  GO_TARBALL="$(mktemp)"
+  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" -o "$GO_TARBALL" \
+    || { rm -f "$GO_TARBALL"; error "Failed to download Go. Check network access and retry."; }
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "$GO_TARBALL"
+  rm -f "$GO_TARBALL"
   ln -sf /usr/local/go/bin/go /usr/local/bin/go
   info "Go ${GO_VERSION} installed"
 fi
@@ -139,16 +145,10 @@ fi
 section "Building relay"
 
 if $USE_AOA; then
-  info "Fetching gousb dependency..."
-  GRADLE_USER="${SUDO_USER:-root}"
-  if [[ "$GRADLE_USER" != "root" ]]; then
-    sudo -u "$GRADLE_USER" env PATH="$PATH" go get github.com/google/gousb@v1.1.3 \
-      || go get github.com/google/gousb@v1.1.3
-  else
-    go get github.com/google/gousb@v1.1.3
-  fi
+  # AOA dependencies are already declared in go.mod. Do not run "go get"
+  # during setup: it can mutate the checkout and make builds non-reproducible.
   go build -tags aoa -o relay-bin . \
-    || error "AOA relay build failed — check that libusb-1.0-0-dev is installed"
+    || error "AOA relay build failed — check that libusb-1.0-0-dev and the Go dependencies are available"
   info "relay (AOA) built → ./relay-bin"
 else
   go build -o relay-bin . \
@@ -173,7 +173,8 @@ else
 fi
 
 APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
-APK_NAME="opentether-v0.9.3.apk"
+VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+APK_NAME="OpenTether-${VERSION}-android.apk"
 cp "$APK_SRC" "../$APK_NAME"
 info "APK built → ./$APK_NAME"
 cd ..
@@ -294,8 +295,11 @@ cleanup() {
   info "Tap 'Stop VPN' on the phone if still active."
   echo ""
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# exec replaces this shell so Ctrl+C hits the relay directly,
-# guaranteeing its iptables cleanup runs before our trap above.
-exec ./relay-bin "${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}"
+# Do not exec here: replacing the shell would discard its EXIT trap and
+# leave the ADB reverse mapping behind. The relay handles its own networking
+# cleanup; this shell removes the mapping when the relay exits.
+./relay-bin "${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}"
