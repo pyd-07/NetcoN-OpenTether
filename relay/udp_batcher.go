@@ -148,9 +148,20 @@ func (fw *FlushWriter) Flush() error {
 	return fw.bw.Flush()
 }
 
-// Close stops the background ticker goroutine. Does NOT close the underlying writer.
+// Close stops the background ticker goroutine and makes a best-effort final
+// flush. Buffered frames would otherwise be silently discarded when a session
+// ends between ticker intervals. Does NOT close the underlying writer.
 func (fw *FlushWriter) Close() {
 	fw.cancel()
+
+	fw.mu.Lock()
+	err := fw.bw.Flush()
+	fw.mu.Unlock()
+	if err != nil {
+		// The connection may already be closed when the session tears down;
+		// this is best-effort, so only surface it in debug output.
+		debugf("FlushWriter: final flush: %v", err)
+	}
 }
 
 func (fw *FlushWriter) tickerLoop(ctx context.Context, interval time.Duration) {
@@ -165,12 +176,16 @@ func (fw *FlushWriter) tickerLoop(ctx context.Context, interval time.Duration) {
 			err := fw.bw.Flush()
 			fw.mu.Unlock()
 			if err != nil {
+				// A failed flush leaves bufio permanently failed; the stream is
+				// unrecoverable. Report once and stop rather than calling
+				// onError on every tick.
 				if fw.onError != nil {
 					fw.onError(err)
 				} else {
 					// Log write failures so USB/TCP errors are visible in -v output.
 					debugf("FlushWriter: flush error: %v", err)
 				}
+				return
 			}
 		}
 	}
