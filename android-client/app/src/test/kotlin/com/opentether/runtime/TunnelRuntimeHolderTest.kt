@@ -71,6 +71,34 @@ class TunnelRuntimeHolderTest {
     }
 
     @Test
+    fun reconnectClearsPreviousSessionStartAndStaleError() {
+        TunnelRuntimeHolder.onServiceStarting(TunnelTransport.ADB)
+        TunnelRuntimeHolder.onTransportConnected(TunnelTransport.ADB, "connected", nowMs = 1_234L)
+        assertEquals(1_234L, TunnelRuntimeHolder.state.value.sessionStartedAtMs)
+
+        TunnelRuntimeHolder.onError(TunnelTransport.ADB, "relay error")
+        TunnelRuntimeHolder.onTransportDisconnected(TunnelTransport.ADB, "retrying in 2000 ms")
+
+        val state = TunnelRuntimeHolder.state.value
+        assertEquals(TunnelPhase.AwaitingTransport, state.phase)
+        assertTrue(state.isRunning)
+        assertNull("reconnect must not keep the previous session start", state.sessionStartedAtMs)
+        assertNull("reconnect must not keep a stale error", state.lastError)
+    }
+
+    @Test
+    fun reconnectThenConnectStartsANewSessionClock() {
+        TunnelRuntimeHolder.onTransportConnected(TunnelTransport.ADB, "first", nowMs = 1_000L)
+        TunnelRuntimeHolder.onTransportDisconnected(TunnelTransport.ADB, "dropped")
+        TunnelRuntimeHolder.onTransportConnected(TunnelTransport.ADB, "second", nowMs = 9_000L)
+
+        val state = TunnelRuntimeHolder.state.value
+        assertEquals(TunnelPhase.Connected, state.phase)
+        assertEquals(9_000L, state.sessionStartedAtMs)
+        assertNull(state.lastError)
+    }
+
+    @Test
     fun stoppedStateClearsLastError() {
         TunnelRuntimeHolder.onStartupError(TunnelTransport.ADB, "failed")
 

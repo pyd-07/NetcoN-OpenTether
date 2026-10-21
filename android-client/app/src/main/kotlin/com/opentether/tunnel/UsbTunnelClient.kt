@@ -20,6 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.FileDescriptor
@@ -62,12 +63,12 @@ class UsbTunnelClient(
 
                 val intFd = intFd(fd)
                 if (intFd == -1) {
-                    AppLogger.e(TAG, "could not read native fd — will retry")
-                    continue
+                    // Throw instead of `continue`: continue would jump past the
+                    // reconnect backoff below and spin in a tight loop.
+                    throw IOException("could not read native fd")
                 }
                 if (!vpnService.protect(intFd)) {
-                    AppLogger.e(TAG, "protect(int) returned false — will retry")
-                    continue
+                    throw IOException("protect(int) returned false")
                 }
 
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, OsConstants.TCP_NODELAY, 1)
@@ -93,7 +94,9 @@ class UsbTunnelClient(
                 AppLogger.e(TAG, "unexpected: ${e.message}")
                 TunnelRuntimeHolder.onError(TunnelTransport.ADB, "Unexpected tunnel error: ${e.message}")
             } finally {
-                fd?.let { closeFd(it) }
+                // Shutdown before close so a blocked read/write is woken even
+                // when close(2) alone would leave the syscall parked.
+                fd?.let { shutdownAndClose(it) }
                 StatsHolder.rttMs.set(0)
             }
 
@@ -135,11 +138,15 @@ class UsbTunnelClient(
         } finally {
             withContext(NonCancellable) {
                 sessionJob.cancel()
-                closeFd(fd)
-                sendJob.join()
-                recvJob.join()
-                pingJob.join()
-                flushJob.join()
+                // Wake blocking socket reads before joining. The fd is closed
+                // exactly once by the caller's finally block.
+                shutdownSocket(fd)
+                withTimeoutOrNull(CLEANUP_TIMEOUT_MS) {
+                    sendJob.join()
+                    recvJob.join()
+                    pingJob.join()
+                    flushJob.join()
+                }
             }
         }
     }
@@ -244,14 +251,23 @@ class UsbTunnelClient(
         -1
     }
 
+    private fun shutdownSocket(fd: FileDescriptor) {
+        try {
+            Os.shutdown(fd, OsConstants.SHUT_RDWR)
+        } catch (_: ErrnoException) {
+            // Already shut down or never connected.
+        } catch (_: Exception) {
+            // Best-effort wake-up only.
+        }
+    }
+
     private fun closeFd(fd: FileDescriptor) {
         try { Os.close(fd) } catch (_: Exception) {}
     }
 
-    private fun reconnectDelayMs(attempt: Int): Long {
-        val exponent = (attempt - 1).coerceIn(0, 4)
-        return (Constants.RECONNECT_DELAY_MS * (1L shl exponent))
-            .coerceAtMost(Constants.MAX_RECONNECT_DELAY_MS)
+    private fun shutdownAndClose(fd: FileDescriptor) {
+        shutdownSocket(fd)
+        closeFd(fd)
     }
 
     companion object {
@@ -259,5 +275,19 @@ class UsbTunnelClient(
         private const val FLUSH_INTERVAL_MS = 2L
         private const val SEND_BUF_SIZE = 32_768
         private const val PING_INTERVAL_MS = 2_000L
+        private const val CLEANUP_TIMEOUT_MS = 2_000L
     }
+}
+
+/**
+ * Bounded exponential reconnect delay for a one-based attempt:
+ * 2s, 4s, 8s, 16s, 30s, then 30s thereafter.
+ *
+ * Kept as a top-level internal function so the policy can be unit-tested
+ * without an Android device or socket.
+ */
+internal fun reconnectDelayMs(attempt: Int): Long {
+    val exponent = (attempt - 1).coerceIn(0, 4)
+    return (Constants.RECONNECT_DELAY_MS * (1L shl exponent))
+        .coerceAtMost(Constants.MAX_RECONNECT_DELAY_MS)
 }
