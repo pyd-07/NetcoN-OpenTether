@@ -2,14 +2,25 @@
 
 This guide is the manual, staged procedure for validating the primary ADB
 transport on a Linux host with an authorized Android device. It is a procedure,
-not evidence that every stage has been executed. The 2026-10-21 hardening pass
-ran only non-privileged builds, unit tests, lint, and a debug build; no physical
-device was attached, so every manual stage below remains unexecuted. A separate
-manual ADB run on 2026-10-20 established the reverse transport, the app-owned
-relay control session, PING/PONG, the VPN/TUN data path, and cleanup that
-restored the host networking baseline; real background traffic was observed
-after the VPN was started manually. Deliberate DNS/HTTP(S)/large-transfer, IPv6,
-reconnect, and full end-to-end validation remain outstanding.
+not a claim of universal compatibility.
+
+The ADB baseline was validated on 2026-10-21 with a POCO C65 (`2310FPCA4I`),
+Android 15/API 35, using a WSL2 Debian host and Windows ADB 37.0.1 through
+server port 5038. The relay, ADB reverse mapping, VPN/TUN, host NAT, IPv4, DNS,
+HTTPS, an approximately 10 MB transfer, app restart, relay restart, USB
+reconnect, post-recovery traffic, and clean shutdown/cleanup passed. During
+relay downtime the app showed **Waiting for your computer** and reconnected
+automatically after relay restart and USB reconnect.
+
+The Android-local IPv6 TUN path (`fdcc::1` ↔ `fdcc::2`) passed, but external
+IPv6 was blocked because the host had no global IPv6 address or default route.
+Do not advertise external IPv6 Internet support from this run. The documented
+`adb install -r` path also failed on the tested MIUI device with
+`INSTALL_FAILED_USER_RESTRICTED`; installation succeeded through `adb push`
+followed by `pm install -r`. SIGKILL/crash recovery, USB debugging
+reauthorization, AOA, other OEMs, other Android versions, and other ADB
+topologies were not tested. These results apply only to the tested device and
+WSL/Windows-ADB topology.
 
 ## 1. Safety and authorization
 
@@ -62,6 +73,11 @@ startup if `ip6tables` is missing.
 Record the Android version and API level, device model, and USB/WSL bridge
 method. Do not record a real device serial in the final evidence bundle.
 
+For WSL, the Linux `adb` server may not see a Windows-connected phone. Select
+one ADB executable and server port and use them for every command below. For
+example, use `/mnt/c/.../platform-tools/adb.exe -P 5038` in place of `adb`, or
+pass the same values to `setup.sh` with `--adb-bin` and `--adb-port`.
+
 ## 4. Stage 1 — build and automated checks
 
 These checks are non-privileged and safe to automate:
@@ -71,6 +87,7 @@ go test -race -count=1 -timeout=120s ./...
 go vet ./...
 make fmt-check
 make test-integration
+make test-setup
 make shellcheck
 bash -n setup.sh
 ( cd android-client && ./gradlew testDebugUnitTest --no-daemon )
@@ -108,11 +125,31 @@ Expected: the device line ends in `device`, not `unauthorized` or `offline`.
 A missing line means the host does not see the device; `unauthorized` means the
 device prompt was not accepted; `offline` means the transport is not usable.
 
-4. Install the APK:
+4. Install the APK with the same ADB executable and server:
 
 ```bash
-adb install -r /path/to/OpenTether-v0.9.5-beta.1-android.apk
+adb install -r /path/to/OpenTether-<tag>-android.apk
 ```
+
+On the tested MIUI device, this returned
+`Failure [INSTALL_FAILED_USER_RESTRICTED: Install canceled by user]`. That is an
+OEM/Android policy restriction, not an ADB transport failure. Keep the standard
+install as the first attempt; only for that exact failure, use a controlled
+fallback with a unique temporary path:
+
+```bash
+adb push /path/to/OpenTether-<tag>-android.apk \
+  /data/local/tmp/opentether-install-<unique>.apk
+adb shell pm install -r /data/local/tmp/opentether-install-<unique>.apk
+adb shell rm -f /data/local/tmp/opentether-install-<unique>.apk
+```
+
+The helper `scripts/adb-install.sh` implements this fallback for `setup.sh` and
+was covered by device-free mock tests. The push + `pm install` sequence itself
+succeeded on the tested device. The fallback does not bypass Android security,
+use root, or approve a prompt. If the device rejects it too, install the APK
+manually on the phone or review the OEM's authorized developer-install setting;
+do not treat the restriction as something the relay can always bypass.
 
 5. Prepare reverse forwarding. The relay's ADB watcher normally runs:
 
@@ -255,6 +292,12 @@ Interpretation:
 - Only some destinations fail: destination-specific routing/firewall or remote
   service problem; do not label the whole tunnel failed without evidence.
 
+Validated result (2026-10-21, single device/host): IPv4 literal and DNS both
+returned 3/3 replies with 0% loss, the HTTPS page loaded, and an approximately
+10 MB download completed. Host `ot0` counters recorded no errors or drops during
+those checks, and NAT counters rose while the tests ran. This is one
+device/host result, not a guarantee for other networks or OEMs.
+
 ## 9. Stage 6 — IPv6 (separate test)
 
 Treat IPv6 as a separate result. The client routes IPv6 and the relay configures
@@ -262,13 +305,19 @@ IPv6 NAT, but compatibility depends on the host and upstream network.
 
 ```bash
 ip -6 addr show ot0
+ip -6 route show
 ip6tables -t nat -S
-adb shell ping -6 -c 3 2606:4700:4700::1111
+adb shell ping6 -c 3 fdcc::2              # Android-local TUN path
+adb shell ping6 -c 3 2606:4700:4700::1111 # external IPv6
 ```
 
-If the Android shell lacks `ping -6`, try `ping6` or a browser IPv6 test. Record
-whether IPv6 is expected to work on the host's upstream network. Do not mark
-IPv4 success as IPv6 success. A failure here should be reported as a separate
+On the tested device, the Android-local path (`fdcc::1` ↔ `fdcc::2`) passed
+with 3/3 replies and 0% loss. External IPv6 was blocked: the host had only a
+link-local IPv6 address and no IPv6 default route, so the phone received
+`Destination unreachable: No route`. External IPv6 DNS/HTTPS was not run.
+
+Do not mark IPv4 success as IPv6 success, and do not advertise external IPv6
+Internet support from this test. A failure here should be reported as a separate
 IPv6 finding with host/upstream details.
 
 ## 10. Stage 7 — failure and recovery
@@ -287,8 +336,25 @@ Run these one at a time and record the observed state:
    it. Check for stale routes, stale reverse mappings, or a UI stuck in
    `Starting`/`Connecting`.
 
-Current implementation behaviour to watch for (static review plus automated
-tests; not yet confirmed on a device):
+Validated on 2026-10-21 (single tested device and WSL/Windows-ADB topology):
+
+- **Relay termination and restart:** clean SIGTERM shutdown produced
+  `shutdown complete`; the UI showed **Waiting for your computer**, not a stale
+  `Connected` state. The app retried at 2s→4s→8s→16s→30s and reconnected
+  automatically after the relay restarted. IPv4 and DNS passed again afterward.
+- **USB unplug/reconnect:** ADB lost the device, the reverse mapping disappeared,
+  and the USB reconnect recreated the mapping and reconnected the app without
+  manual action. Post-recovery IPv4, DNS, and HTTPS passed.
+- **App Stop/Disconnect:** the app stopped its session and service, `tun0`
+  disappeared, and the relay reported the session ended.
+- **Partial connection failure during a transfer:** not run.
+- **SIGKILL/crash recovery:** not run. Validation used clean SIGTERM/Ctrl+C.
+  In-process cleanup cannot run after SIGKILL, so do not claim crash cleanup.
+- **USB debugging reauthorization:** not run; no authorization prompt appeared
+  during the USB reconnect.
+
+Implementation behaviour confirmed by this run or covered by automated/static
+review:
 
 - A new Android TCP connection preempts the previous session.
 - There is no application-level read/idle deadline. The client sends PINGs every
@@ -296,7 +362,7 @@ tests; not yet confirmed on a device):
   protocol changes would risk disconnecting healthy sessions. A half-open
   session is therefore cleared by the client's reconnect (last-connection-wins)
   rather than by a relay-side timer.
-- `FlushWriter.Close` now performs a best-effort final flush; a failed flush is
+- `FlushWriter.Close` performs a best-effort final flush; a failed flush is
   logged at debug level because the stream is usually already gone.
 - Host network setup rolls back resources it created on partial failure. A
   failed rollback is reported as `network cleanup incomplete` and by
@@ -305,8 +371,6 @@ tests; not yet confirmed on a device):
   created, with a bounded shutdown timeout.
 - Android reconnect uses 2s→4s→8s→16s→30s backoff, and a reconnect resets the
   session start time instead of inheriting the previous session's clock.
-
-Record which behaviours actually reproduce on the device.
 
 ## 11. Stage 8 — cleanup audit
 
@@ -341,6 +405,12 @@ adb reverse --remove tcp:8765
 Do not use an automatic cleanup script on an unknown host. If leftovers exist,
 record the exact output and stop; manual remediation requires separate review.
 
+Validated cleanup result (2026-10-21): after the final app stop and clean relay
+SIGTERM, the relay reported `shutdown complete`; its owned reverse mapping,
+rules, and routes were removed; `ot0` was gone; the forwarding sysctls were
+restored; and no process was listening on port 8765. This does not establish
+cleanup after SIGKILL or after a failed rollback.
+
 ## 12. Evidence bundle
 
 Create a bundle from the authorized run. Sanitize before sharing:
@@ -369,6 +439,7 @@ include raw `adb devices -l` or full `adb logcat` output without review.
 |---|---|---|
 | `go test`, `go vet`, `make fmt-check` | Yes | Local, non-privileged |
 | `make test-integration` | Yes | Pipe/test-double session tests; no TUN or device |
+| `make test-setup` | Yes | Mock ADB install/fallback tests; no device or host network change |
 | Gradle unit tests / debug build | Yes | No device or host network change |
 | `adb version`, `adb devices`, `adb reverse --list` | Read-only inspection, yes | Starts a local adb server; does not change USB/IP or host networking |
 | `adb install`, `adb reverse`, `adb reverse --remove` | Manual/authorized | Changes device state |
@@ -377,31 +448,43 @@ include raw `adb devices -l` or full `adb logcat` output without review.
 
 ## 14. Known limitations and validation status
 
-- A manual ADB device run on 2026-10-20 established the reverse transport,
-  app-owned relay control session, PING/PONG, the VPN/TUN data path, and cleanup
-  restoring the host networking baseline; real background traffic was observed
-  after the VPN was started manually. Deliberate DNS/HTTP(S)/large-transfer,
-  IPv6, reconnect, and full end-to-end validation remain outstanding.
-- The 2026-10-21 hardening pass added automated coverage for reverse-mapping
-  ownership, partial-network-setup rollback, sysctl restoration, pong
-  coalescing, writer close-flush, session preemption, reconnect backoff, and
-  reconnect state reset. Those changes are not evidence of device behaviour.
-- No physical device was attached during the hardening pass. Device discovery,
-  authorization, reverse mapping (including WSL/Windows ADB), real traffic,
-  USB replug, relay restart, and privileged cleanup are **BLOCKED**, not passed.
-- AOA is experimental. The relay sends accessory version `1`; APKs built against
-  the older `1.0` filter will not match. AOA builds require libusb metadata.
+- **Validated baseline (single device/topology):** POCO C65 (`2310FPCA4I`),
+  Android 15/API 35, WSL2 Debian host, Windows ADB 37.0.1 on server port 5038.
+  Relay startup, ADB reverse mapping, VPN/TUN, host NAT, IPv4, DNS, HTTPS, an
+  approximately 10 MB transfer, app restart, relay restart, USB reconnect,
+  post-recovery traffic, and clean shutdown/cleanup passed. These results do
+  not establish compatibility with other devices, OEMs, Android versions, ADB
+  topologies, or Linux hosts.
+- **IPv6 is partial:** the Android-local TUN path passed, but external IPv6 was
+  blocked because the host had no global IPv6 address or default route. External
+  IPv6 DNS/HTTPS was not run. Do not claim IPv6 Internet support from this run.
+- **MIUI install restriction:** the standard `adb install -r` path failed with
+  `INSTALL_FAILED_USER_RESTRICTED`; the tested push + `pm install -r` sequence
+  succeeded. The setup helper implements that controlled fallback only for the
+  exact restriction, with a unique temporary APK and cleanup. If the fallback
+  is rejected too, the user must install manually or change the authorized
+  developer-install setting; Android security is not bypassed.
+- **Clean shutdown only:** clean SIGTERM/Ctrl+C shutdown is the supported tested
+  path. A SIGKILL/crash has no opportunity to run the in-process undo list;
+  static inspection indicates stale rules and forwarding sysctls may persist, so
+  crash recovery is **not validated** and must not be claimed.
+- **Not tested:** USB debugging reauthorization, a partial failure during a large
+  transfer, other OEMs, other Android versions, other Linux hosts, other ADB
+  server/device topologies, and AOA negotiation or bulk transfers.
+- **AOA remains experimental and outside this baseline.** AOA builds require
+  libusb metadata. The relay sends accessory version `1`; APKs built against the
+  older `1.0` filter will not match. Do not present AOA as validated support.
 - The relay listener is loopback-only but unauthenticated; local processes can
   inject frames.
 - The relay and Android client have bounded retry/backoff logic. A reconnect
   creates a new session clock on the Android side; the relay still preempts the
   previous Android connection rather than multiplexing sessions.
-- The Android side has static-review risks around foreground-service types,
+- The Android side still has static-review risks around foreground-service types,
   notification permission, and retry loops on fd/protect failures; the fd/protect
-  busy loop is fixed, but these require device confirmation and are not claimed
-  fully fixed here.
-- A passing mock test proves only the tested protocol/session seam. Use the
-  staged procedure above for real-device evidence.
+  busy loop is fixed, but broad device confirmation is not claimed.
+- Device-free tests and mock integration tests prove only their tested surfaces.
+  They do not open a real TUN device, change host networking, or prove
+  end-to-end connectivity.
 
 For the current build/test commands and troubleshooting table, see
 [`../README.md`](../README.md).

@@ -3,14 +3,16 @@
 # SC2015 is intentionally used below for fail-fast command chains where the
 # final branch calls error/warn after a failed command.
 # ══════════════════════════════════════════════════════════════════════════════
-#   OpenTether (NetcoN) Setup Script - v0.9.3
+#   OpenTether (NetcoN) Setup Script - v0.9.5
 #  | Tested on Debian / Ubuntu (amd64 + arm64)
 #
 #  Usage:
 #    sudo ./setup.sh              # ADB transport  (default, USB debugging required)
-#    sudo ./setup.sh --aoa        # AOA transport  (no USB debugging needed)
+#    sudo ./setup.sh --aoa        # AOA transport  (experimental, not validated)
 #    sudo ./setup.sh --build-only # build binaries only, don't start relay
 #    sudo ./setup.sh -v           # verbose relay output
+#    sudo ./setup.sh --adb-bin /path/to/adb --adb-port 5038
+#                                 # select the ADB executable/server for WSL
 #    sudo ./setup.sh --help       # show this help
 # ══════════════════════════════════════════════════════════════════════════════
 export PATH=$PATH:/usr/local/go/bin:/home/${SUDO_USER:-root}/go/bin
@@ -24,20 +26,36 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 # the mapping only when this remains true.
 REVERSE_OWNED=false
 DEVICE=""
+ADB_BIN="adb"
+ADB_PORT="0"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 info()    { echo -e "${GREEN}[✔]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[✘]${NC} $1"; exit 1; }
 section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
+# Run every setup-time ADB command through the same executable and server port
+# that will be passed to the relay watcher. This prevents a WSL setup from
+# silently falling back to a different Linux ADB server.
+adb_cmd() {
+  if [[ "$ADB_PORT" != "0" ]]; then
+    "$ADB_BIN" -P "$ADB_PORT" "$@"
+  else
+    "$ADB_BIN" "$@"
+  fi
+}
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
-  echo -e "${BOLD}OpenTether setup v0.9.3${NC}"
+  echo -e "${BOLD}OpenTether setup v0.9.5${NC}"
   echo ""
   echo "  sudo ./setup.sh              ADB transport (USB debugging required)"
-  echo "  sudo ./setup.sh --aoa        AOA transport (no USB debugging needed)"
+  echo "  sudo ./setup.sh --aoa        AOA transport (experimental, not validated)"
   echo "  sudo ./setup.sh --build-only Build relay + APK only, don't start"
   echo "  sudo ./setup.sh -v           Verbose relay logging"
+  echo "  sudo ./setup.sh --adb-bin PATH --adb-port PORT"
+  echo "                               Select the ADB executable/server (WSL/Windows)"
   echo "  sudo ./setup.sh --help       Show this help"
   echo ""
   echo "Flags can be combined:  sudo ./setup.sh --aoa -v"
@@ -49,23 +67,63 @@ USE_AOA=false
 BUILD_ONLY=false
 RELAY_EXTRA_FLAGS=()
 
-for arg in "$@"; do
-  case "$arg" in
-    --aoa)        USE_AOA=true; RELAY_EXTRA_FLAGS+=(--aoa) ;;
-    --build-only) BUILD_ONLY=true ;;
-    --help|-h)    usage ;;
-    *)            RELAY_EXTRA_FLAGS+=("$arg") ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --aoa)
+      USE_AOA=true
+      RELAY_EXTRA_FLAGS+=(--aoa)
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=true
+      shift
+      ;;
+    --adb-bin)
+      [[ $# -ge 2 ]] || error "--adb-bin requires a path"
+      ADB_BIN="$2"
+      shift 2
+      ;;
+    --adb-port)
+      [[ $# -ge 2 ]] || error "--adb-port requires a port"
+      ADB_PORT="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      ;;
+    *)
+      RELAY_EXTRA_FLAGS+=("$1")
+      shift
+      ;;
   esac
 done
+
+[[ "$ADB_PORT" =~ ^[0-9]+$ ]] \
+  || error "--adb-port must be a number between 0 and 65535"
+(( 10#$ADB_PORT >= 0 && 10#$ADB_PORT <= 65535 )) \
+  || error "--adb-port must be between 0 and 65535"
+
+if [[ "$ADB_BIN" != "adb" ]]; then
+  [[ -x "$ADB_BIN" ]] \
+    || error "ADB executable not found or not executable: $ADB_BIN"
+fi
+
+ADB_DISPLAY="$ADB_BIN"
+if [[ "$ADB_PORT" != "0" ]]; then
+  ADB_DISPLAY="$ADB_BIN -P $ADB_PORT"
+fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
 echo "  ╔═══════════════════════════════╗"
-echo "  ║   OpenTether  v0.9.3  setup   ║"
+echo "  ║   OpenTether  v0.9.5  setup   ║"
 echo "  ╚═══════════════════════════════╝"
 echo -e "${NC}"
-echo "  Transport : $(if $USE_AOA; then echo 'AOA (direct USB, no USB debugging)'; else echo 'ADB (TCP over USB, USB debugging required)'; fi)"
+echo "  Transport : $(if $USE_AOA; then echo 'AOA (experimental, not validated)'; else echo 'ADB (TCP over USB, USB debugging required)'; fi)"
 echo "  Mode      : $(if $BUILD_ONLY; then echo 'build only'; else echo 'build + run'; fi)"
+if ! $USE_AOA; then
+  echo "  ADB       : $ADB_DISPLAY"
+fi
 echo ""
 
 # ── 1. Root check ─────────────────────────────────────────────────────────────
@@ -95,7 +153,11 @@ install_if_missing ip        iproute2
 install_if_missing java      openjdk-17-jdk
 
 if ! $USE_AOA; then
-  install_if_missing adb adb
+  if [[ "$ADB_BIN" == "adb" ]]; then
+    install_if_missing adb adb
+  else
+    info "Using configured ADB executable: $ADB_BIN"
+  fi
 fi
 
 if $USE_AOA; then
@@ -194,11 +256,15 @@ if $BUILD_ONLY; then
   echo ""
   if ! $USE_AOA; then
     echo "  To run manually:"
-    echo "    adb install $APK_NAME"
-    echo "    sudo ./relay-bin    # sets up adb reverse automatically"
+    echo "    $ADB_DISPLAY install $APK_NAME"
+    if [[ "$ADB_BIN" != "adb" || "$ADB_PORT" != "0" ]]; then
+      echo "    sudo ./relay-bin --adb-bin \"$ADB_BIN\" --adb-port $ADB_PORT"
+    else
+      echo "    sudo ./relay-bin    # sets up adb reverse automatically"
+    fi
   else
     echo "  To run manually:"
-    echo "    adb install $APK_NAME     # one-time, needs USB debugging just for install"
+    echo "    $ADB_DISPLAY install $APK_NAME     # one-time, needs USB debugging just for install"
     echo "    sudo ./relay-bin --aoa    # connect cable — phone prompts to open app"
   fi
   echo ""
@@ -220,8 +286,8 @@ if $USE_AOA; then
     warn "lsusb not available — install 'usbutils' to enable USB device detection"
   fi
 else
-  adb start-server &>/dev/null || true
-  DEVICE=$(adb devices 2>/dev/null | awk 'NR>1 && /\tdevice$/ {print $1; exit}')
+  adb_cmd start-server &>/dev/null || true
+  DEVICE=$(adb_cmd devices 2>/dev/null | awk 'NR>1 && /\tdevice$/ {print $1; exit}')
   if [[ -z "$DEVICE" ]]; then
     echo ""
     error "No authorised Android device found.
@@ -230,7 +296,7 @@ else
     1.  Cable is plugged in
     2.  Settings → Developer Options → USB Debugging is ON
     3.  You tapped 'Allow' on the USB debugging prompt on the phone
-    4.  Running 'adb devices' shows your device as 'device' (not 'unauthorized')
+    4.  Running '$ADB_DISPLAY devices' shows your device as 'device' (not 'unauthorized')
 
   Once fixed, re-run:  sudo ./setup.sh"
   fi
@@ -241,12 +307,18 @@ fi
 section "Installing app on device"
 
 if ! $USE_AOA; then
-  adb -s "$DEVICE" install -r "$APK_NAME" \
-    && info "App installed on $DEVICE" \
-    || error "ADB install failed — try manually:  adb -s $DEVICE install -r $APK_NAME"
+  if bash "$SCRIPT_DIR/scripts/adb-install.sh" \
+      --adb-bin "$ADB_BIN" \
+      --adb-port "$ADB_PORT" \
+      --serial "$DEVICE" \
+      --apk "$APK_NAME"; then
+    info "App installed on $DEVICE"
+  else
+    error "APK installation failed — try manually:  $ADB_DISPLAY -s $DEVICE install -r $APK_NAME"
+  fi
 else
   warn "AOA mode — you need ADB once to install the APK (USB debugging required just for this):"
-  warn "  adb install -r $APK_NAME"
+  warn "  $ADB_DISPLAY install -r $APK_NAME"
   warn "After installation, USB debugging can be disabled."
 fi
 
@@ -257,9 +329,9 @@ if ! $USE_AOA; then
   # but running it now means the very first connection works immediately.
   # A mapping that already exists is reused but never adopted, so this script
   # cannot remove a tunnel another process owns.
-  if adb -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
+  if adb_cmd -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
     info "ADB reverse tunnel already present for $DEVICE (leaving ownership alone)"
-  elif adb -s "$DEVICE" reverse tcp:8765 tcp:8765; then
+  elif adb_cmd -s "$DEVICE" reverse tcp:8765 tcp:8765; then
     REVERSE_OWNED=true
     info "ADB reverse tunnel active  (phone:8765 → PC:8765)"
   else
@@ -271,11 +343,11 @@ fi
 section "Launching app"
 
 if ! $USE_AOA; then
-  adb -s "$DEVICE" shell am start -n com.opentether/.MainActivity &>/dev/null \
+  adb_cmd -s "$DEVICE" shell am start -n com.opentether/.MainActivity &>/dev/null \
     && info "OpenTether launched on device" \
     || warn "Auto-launch failed — open OpenTether manually on the phone"
   echo ""
-  warn "Tap 'Start VPN' and accept the system VPN consent dialog on first use."
+  warn "Tap 'Connect' and accept the system VPN consent dialog on first use."
 else
   echo ""
   warn "Connect your phone over USB."
@@ -301,14 +373,14 @@ cleanup() {
   echo ""
   section "Shutting down"
   if ! $USE_AOA && [[ "$REVERSE_OWNED" == true && -n "$DEVICE" ]]; then
-    if adb -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
-      adb -s "$DEVICE" reverse --remove tcp:8765 2>/dev/null \
+    if adb_cmd -s "$DEVICE" reverse --list 2>/dev/null | grep -Eq 'tcp:8765[[:space:]]+tcp:8765'; then
+      adb_cmd -s "$DEVICE" reverse --remove tcp:8765 2>/dev/null \
         && info "ADB tunnel removed" \
         || warn "Could not remove ADB tunnel for $DEVICE"
     fi
   fi
   info "iptables rules will be removed by the relay process on exit."
-  info "Tap 'Stop VPN' on the phone if still active."
+  info "Tap 'Disconnect' on the phone if the VPN is still active."
   echo ""
 }
 trap cleanup EXIT
@@ -318,4 +390,14 @@ trap 'exit 143' TERM
 # Do not exec here: replacing the shell would discard its EXIT trap and
 # leave the ADB reverse mapping behind. The relay handles its own networking
 # cleanup; this shell removes the mapping when the relay exits.
-./relay-bin "${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}"
+RELAY_CMD=(./relay-bin)
+if ! $USE_AOA; then
+  if [[ "$ADB_BIN" != "adb" ]]; then
+    RELAY_CMD+=(--adb-bin "$ADB_BIN")
+  fi
+  if [[ "$ADB_PORT" != "0" ]]; then
+    RELAY_CMD+=(--adb-port "$ADB_PORT")
+  fi
+fi
+RELAY_CMD+=("${RELAY_EXTRA_FLAGS[@]+"${RELAY_EXTRA_FLAGS[@]}"}")
+"${RELAY_CMD[@]}"

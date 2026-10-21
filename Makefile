@@ -1,4 +1,4 @@
-.PHONY: help doctor fmt fmt-check vet test test-go test-integration test-android lint build build-go build-aoa build-android shellcheck check clean
+.PHONY: help doctor fmt fmt-check vet test test-go test-integration test-android test-setup lint build build-go build-aoa build-android shellcheck check clean
 
 GO ?= go
 RELAY_BIN ?= relay-bin
@@ -15,6 +15,7 @@ help:
 	@echo "  make test-go         Run Go tests with the race detector"
 	@echo "  make test-integration Run deterministic session/protocol tests"
 	@echo "  make test-android    Run Android unit tests"
+	@echo "  make test-setup      Run device-free setup/install shell tests"
 	@echo "  make lint            Run Android lint"
 	@echo "  make build           Build Go relays and debug APK"
 	@echo "  make build-go        Build the standard Go relay"
@@ -69,6 +70,9 @@ test-integration:
 test-android:
 	cd $(ANDROID_DIR) && ./gradlew test --no-daemon --stacktrace
 
+test-setup:
+	bash tests/adb-install-test.sh
+
 lint:
 	cd $(ANDROID_DIR) && ./gradlew lint --no-daemon --stacktrace
 
@@ -93,7 +97,7 @@ shellcheck:
 		shellcheck $$scripts; \
 	fi
 
-check: fmt-check vet test lint build-aoa shellcheck
+check: fmt-check vet test lint build-aoa test-setup shellcheck
 
 clean:
 	rm -f "$(RELAY_BIN)"

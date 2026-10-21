@@ -144,6 +144,9 @@ jobs:
           bash -n "${scripts[@]}"
           shellcheck "${scripts[@]}"
 
+      - name: Test ADB install fallback
+        run: bash tests/adb-install-test.sh
+
   dependency-review:
     name: Dependency security
     runs-on: ubuntu-latest
